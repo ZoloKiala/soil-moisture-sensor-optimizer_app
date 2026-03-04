@@ -1,0 +1,1 @@
+web: gunicorn soilmoisture_site.wsgi
