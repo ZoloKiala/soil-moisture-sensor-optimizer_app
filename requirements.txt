@@ -11,3 +11,4 @@ folium
 requests
 scikit-learn
 joblib
+matplotlib
