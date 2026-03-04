@@ -41,7 +41,7 @@ MarkupSafe==3.0.3
 matplotlib==3.10.8
 mdurl==0.1.2
 numpy==2.4.2
-packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1769093650/work
+packaging 
 pandas==3.0.1
 pillow==12.1.1
 proto-plus==1.27.1
