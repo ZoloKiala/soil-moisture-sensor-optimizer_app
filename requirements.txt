@@ -13,3 +13,5 @@ scikit-learn
 joblib
 matplotlib
 reportlab
+earthengine-api
+shapely
