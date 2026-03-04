@@ -1,0 +1,11 @@
+VV
+VH
+angle
+VV_VH_ratio
+VV_minus_VH
+VV_plus_VH
+VV_dB
+VH_dB
+n_images
+elev
+slope

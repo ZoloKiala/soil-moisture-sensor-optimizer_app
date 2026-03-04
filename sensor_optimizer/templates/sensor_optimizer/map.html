@@ -1,0 +1,106 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sensor layout – Soil Moisture Sensor Optimization</title>
+
+  <link rel="stylesheet" href="{% static 'sensor_optimizer/style.css' %}">
+</head>
+<body>
+  <div class="page">
+
+<header>
+  <div class="pill">
+    <span>🧭</span>
+    <span>Sensor layout preview</span>
+  </div>
+
+  <h1>SM basemap and sensor locations</h1>
+
+  <p class="subtitle">
+    Date: <b>{{ date_target }}</b> ·
+    Cell size: <b>{{ cell_size_m }} m</b> ·
+    CV ≈ <b>{{ cv_percent|floatformat:2 }} %</b>
+  </p>
+
+  <div class="btn-row" style="margin-top:1rem;">
+    <button onclick="history.back()" class="btn btn-secondary">
+      ← Back to optimization results
+    </button>
+  </div>
+</header>
+
+
+    <div class="layout-two">
+      <!-- LEFT: Map -->
+      <div class="card">
+        <div class="card-title">
+          <span class="icon">🗺️</span>
+          <span>Map</span>
+        </div>
+        <div class="card-sub">
+          Coloured tiles show predicted soil moisture (%) per grid cell.
+          Red dots mark sensor locations (grid centroids).
+        </div>
+
+        <div id="map-preview">
+          {{ map_html|safe }}
+        </div>
+      </div>
+
+      <!-- RIGHT: Coordinates + report download -->
+      <div class="card">
+        <div class="card-title">
+          <span class="icon">📍</span>
+          <span>Sensor coordinates</span>
+        </div>
+        <div class="card-sub">
+          Coordinates exported from the same grid used for the map on the left.
+        </div>
+
+        <div class="table-wrapper">
+          <table class="results-table">
+            <thead>
+              <tr>
+                <th>sensor_id</th>
+                <th>Longitude (°E)</th>
+                <th>Latitude (°S)</th>
+                <th>sm_pred</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in coords %}
+              <tr>
+                <td>{{ row.sensor_id }}</td>
+                <td>{{ row.lon }}</td>
+                <td>{{ row.lat }}</td>
+                <td>{{ row.sm_pred|floatformat:2 }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="btn-row" style="margin-top: 0.9rem;">
+          <form method="post" action="{% url 'sensor_optimizer:sensor_optimizer_map' %}">
+            {% csrf_token %}
+            <input type="hidden" name="date_target" value="{{ date_target }}">
+            <input type="hidden" name="cell_size_m" value="{{ cell_size_m }}">
+            <input type="hidden" name="geojson_tmp_path" value="{{ geojson_tmp_path }}">
+            <button type="submit" class="btn btn-secondary">
+              ⬇ Download layout report (PDF)
+            </button>
+          </form>
+        </div>
+
+        <p class="note">
+          The layout report bundles this grid configuration into a single PDF:
+          it includes the grid size, CV, number of sensors, and the full list
+          of sensor coordinates and predicted soil moisture values.
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

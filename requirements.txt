@@ -1,0 +1,13 @@
+Django
+earthengine-api
+huggingface_hub
+joblib
+numpy
+pandas
+matplotlib
+geopandas
+shapely
+folium
+branca
+requests
+scikit-learn
