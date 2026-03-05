@@ -17,6 +17,10 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 from django.shortcuts import redirect
+from django.views.generic import RedirectView
+from django.conf import settings
+from django.conf.urls.static import static
+
 
 
 def root_redirect(request):
@@ -25,10 +29,19 @@ def root_redirect(request):
 urlpatterns = [
     path("", root_redirect),  # homepage redirect
     path("", include(("sensor_optimizer.urls", "sensor_optimizer"), namespace="sensor_optimizer")),
+    path("favicon.ico", RedirectView.as_view(
+        url="/static/sensor_optimizer/favicon.ico",
+        permanent=True
+    )),
 ]
 
 
 handler404 = "soilmoisture_site.views.error_404"
 handler500 = "soilmoisture_site.views.error_500"
+
+
+
+if settings.DEBUG:
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
 
 

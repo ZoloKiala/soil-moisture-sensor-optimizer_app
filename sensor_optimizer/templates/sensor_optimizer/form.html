@@ -1,9 +1,18 @@
 {% load static %}
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <title>Soil Moisture Sensor Optimization</title>
+
+<!-- Favicon -->
+  <link rel="icon" href="{% static 'sensor_optimizer/favicon.ico' %}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'sensor_optimizer/favicon-32x32.png' %}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{% static 'sensor_optimizer/favicon-16x16.png' %}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'sensor_optimizer/apple-touch-icon.png' %}">
+
+
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
 <link rel="stylesheet" href="{% static 'sensor_optimizer/style.css' %}" />
@@ -122,6 +131,63 @@ font-weight:800!important;
 padding:1.05rem 1.2rem!important;
 border-radius:16px!important
 }
+
+/* ✅ Generic hide utility used by your JS */
+.hidden { display: none !important; }
+
+/* ✅ Busy overlay (submit only) */
+.busy-overlay{
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.busy-box{
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(255,255,255,0.55);
+  border-radius: 18px;
+  padding: 18px;
+  width: min(560px, 92vw);
+  box-shadow: 0 22px 60px rgba(0,0,0,0.25);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.spinner{
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 5px solid rgba(16,185,129,0.25);
+  border-top-color: rgba(5,150,105,1);
+  animation: spin 0.9s linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.busy-text{
+  font-weight: 800;
+  font-size: 1.05rem;
+  line-height: 1.25;
+  color: #0f172a;
+}
+
+.busy-text span{
+  display: inline-block;
+  margin-top: 6px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: rgba(15,23,42,0.75);
+}
+
 
 </style>
 </head>
@@ -265,61 +331,195 @@ Status: <span id="draw-status-text">Waiting for map…</span>
 </div>
 
 <script>
+document.addEventListener("DOMContentLoaded", function () {
 
-document.addEventListener("DOMContentLoaded",function(){
+  const form = document.getElementById("optimizer-form");
+  const overlay = document.getElementById("loading-overlay");
+  const hiddenGeo = document.getElementById("drawn_geojson");
+  const uploadInput = document.getElementById("id_geojson_file");
+  const statusText = document.getElementById("draw-status-text");
 
-const form=document.getElementById("optimizer-form")
-const overlay=document.getElementById("loading-overlay")
-const hiddenGeo=document.getElementById("drawn_geojson")
-const uploadInput=document.getElementById("id_geojson_file")
-const statusText=document.getElementById("draw-status-text")
+  /* SPLASH CONTROL (your logic kept) */
+  const splash = document.getElementById("startup-overlay");
+  const params = new URLSearchParams(window.location.search);
+  const skipSplash = params.get("nosplash") === "1";
 
-/* SPLASH CONTROL */
+  if (skipSplash && splash) {
+    splash.remove();
+  } else {
+    document.documentElement.classList.add("splash-lock");
+    document.body.classList.add("splash-lock");
 
-const splash=document.getElementById("startup-overlay")
-const params=new URLSearchParams(window.location.search)
-const skipSplash=params.get("nosplash")==="1"
+    setTimeout(() => {
+      if (splash) {
+        splash.classList.add("hidden");
+        setTimeout(() => {
+          splash.remove();
+          document.documentElement.classList.remove("splash-lock");
+          document.body.classList.remove("splash-lock");
+        }, 700);
+      }
+    }, 1800);
+  }
 
-if(skipSplash && splash){
-splash.remove()
-}else{
-document.documentElement.classList.add("splash-lock")
-document.body.classList.add("splash-lock")
+  /* spinner */
+  function showOverlay() {
+    if (overlay) overlay.classList.remove("hidden");
+  }
 
-setTimeout(()=>{
-if(splash){
-splash.classList.add("hidden")
-setTimeout(()=>{
-splash.remove()
-document.documentElement.classList.remove("splash-lock")
-document.body.classList.remove("splash-lock")
-},700)
-}
-},1800)
-}
+  /* -----------------------------
+     MAP detection + helpers
+     ----------------------------- */
 
-/* spinner */
+  function findLeafletMap() {
+    // if you set this in python (recommended), we'll pick it up
+    if (window.__SENSOR_OPTIMIZER_MAP__) return window.__SENSOR_OPTIMIZER_MAP__;
 
-function showOverlay(){
-if(overlay)overlay.classList.remove("hidden")
-}
+    if (!window.L || !L.Map) return null;
 
-form.addEventListener("submit",function(e){
+    // Try to find the first Leaflet map object on window (Folium creates map_xxxxx variables)
+    for (const k of Object.keys(window)) {
+      try {
+        const v = window[k];
+        if (v && v instanceof L.Map) return v;
+      } catch (e) {}
+    }
+    return null;
+  }
 
-const hasUpload=uploadInput&&uploadInput.files&&uploadInput.files.length>0
+  function waitForMap(maxMs = 8000, stepMs = 120) {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const t = setInterval(() => {
+        const map = findLeafletMap();
+        if (map) { clearInterval(t); resolve(map); return; }
+        if (Date.now() - start > maxMs) { clearInterval(t); resolve(null); }
+      }, stepMs);
+    });
+  }
 
-if(!hasUpload&&!hiddenGeo.value){
-e.preventDefault()
-alert("Please draw a polygon on the map OR upload a GeoJSON file.")
-return
-}
+  function setGeoJSONFromLayer(layer) {
+    try {
+      const feat = layer.toGeoJSON();
+      if (!feat || !feat.geometry) return false;
+      if (feat.geometry.type !== "Polygon" && feat.geometry.type !== "MultiPolygon") return false;
 
-showOverlay()
+      hiddenGeo.value = JSON.stringify({
+        type: "FeatureCollection",
+        features: [feat],
+      });
 
-})
+      if (statusText) statusText.textContent = "Polygon captured ✅";
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
 
-})
+  // fallback: try extract any polygon from existing map layers (useful if draw events didn't fire)
+  function tryExtractPolygonFromMap(map) {
+    let found = false;
+    try {
+      map.eachLayer(function (layer) {
+        if (found) return;
+        if (!layer || typeof layer.toGeoJSON !== "function") return;
 
+        const gj = layer.toGeoJSON();
+        const g = gj && gj.geometry;
+        if (!g) return;
+
+        if (g.type === "Polygon" || g.type === "MultiPolygon") {
+          found = setGeoJSONFromLayer(layer);
+        }
+      });
+    } catch (e) {}
+    return found;
+  }
+
+  function attachDrawListeners(map) {
+    // Leaflet.draw must exist (it should, from your Folium header/plugins)
+    if (!window.L || !window.L.Draw) {
+      if (statusText) statusText.textContent = "Leaflet.draw not found.";
+      return;
+    }
+    if (map.__drawListenersAttached) return;
+    map.__drawListenersAttached = true;
+
+    map.on(L.Draw.Event.CREATED, function (e) {
+      setGeoJSONFromLayer(e.layer);
+    });
+
+    map.on(L.Draw.Event.EDITED, function (e) {
+      let first = null;
+      e.layers.eachLayer(function (layer) { if (!first) first = layer; });
+      if (first) setGeoJSONFromLayer(first);
+    });
+
+    map.on(L.Draw.Event.DELETED, function () {
+      hiddenGeo.value = "";
+      if (statusText) statusText.textContent = "No polygon captured yet.";
+    });
+  }
+
+  function addSearchControl(map) {
+    // Leaflet Control Geocoder
+    if (!window.L || !L.Control || !L.Control.Geocoder) return;
+    if (map.__geocoderAdded) return;
+    map.__geocoderAdded = true;
+
+    const geocoder = L.Control.geocoder({
+      position: "topright",
+      defaultMarkGeocode: false,
+      placeholder: "Search place…",
+    })
+    .on("markgeocode", function (e) {
+      try {
+        const bbox = e.geocode && e.geocode.bbox;
+        if (bbox) {
+          map.fitBounds(bbox, { padding: [20, 20] });
+        } else if (e.geocode && e.geocode.center) {
+          map.setView(e.geocode.center, 16);
+        }
+      } catch (err) {}
+    })
+    .addTo(map);
+  }
+
+  (async function initMapHooks() {
+    const map = await waitForMap();
+    if (!map) {
+      if (statusText) statusText.textContent = "Map not detected.";
+      return;
+    }
+
+    // expose for your other code / debugging
+    window.__SENSOR_OPTIMIZER_MAP__ = map;
+
+    attachDrawListeners(map);
+    addSearchControl(map);
+
+    if (statusText) statusText.textContent = "Map ready — draw a polygon.";
+  })();
+
+  /* submit validation (your logic kept, plus polygon fallback) */
+  form.addEventListener("submit", function (e) {
+    const hasUpload = uploadInput && uploadInput.files && uploadInput.files.length > 0;
+
+    if (!hasUpload && !hiddenGeo.value) {
+      const map = window.__SENSOR_OPTIMIZER_MAP__ || findLeafletMap();
+      if (map) tryExtractPolygonFromMap(map);
+    }
+
+    if (!hasUpload && !hiddenGeo.value) {
+      e.preventDefault();
+      alert("Please draw a polygon on the map OR upload a GeoJSON file.");
+      return;
+    }
+
+    showOverlay();
+  });
+
+});
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

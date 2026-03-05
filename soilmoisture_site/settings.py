@@ -139,7 +139,13 @@ if RAILWAY_PUBLIC_DOMAIN:
 
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
-
+# Django 4.2+ (including Django 6) uses STORAGES
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
+    },
+}
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
@@ -171,3 +177,4 @@ CSRF_TRUSTED_ORIGINS = [
 
 if RAILWAY_PUBLIC_DOMAIN:
     CSRF_TRUSTED_ORIGINS.append(f"https://{RAILWAY_PUBLIC_DOMAIN}")
+
