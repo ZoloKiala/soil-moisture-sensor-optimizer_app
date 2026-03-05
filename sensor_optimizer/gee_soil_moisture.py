@@ -14,6 +14,8 @@
 import os
 import math
 from pathlib import Path
+from shapely import affinity
+
 
 import numpy as np
 import pandas as pd
@@ -296,17 +298,27 @@ def attach_s1_nearest_composite_closest_mean_over_cell(
 # Build grid (GeoPandas + UTM -> EE FeatureCollection)
 # ------------------------------------------------------------
 
-def build_plot_grid_centroids(date_str, plot_geojson_path, cell_size_m):
-    """
-    Build regular grid over AOI (in local UTM), clip to AOI, reproject to EPSG:4326,
-    and return as EE FeatureCollection of cell polygons.
 
-    Each feature has:
-      - geometry: polygon
-      - cell_id
-      - lon / lat (centroid in EPSG:4326)
-      - date
-      - Sheet='plot_grid'
+def build_plot_grid_centroids(
+    date_str,
+    plot_geojson_path,
+    cell_size_m,
+    min_overlap: float = 0.50,          # ✅ Option 1: overlap fraction threshold
+    align_to_aoi_axis: bool = False,    # ✅ Option 2: rotate AOI, build grid, rotate back
+):
+    """
+    Build grid cells over AOI and return EE FeatureCollection of *cell polygons*.
+
+    Inclusion rule (Option 1):
+      - Keep a cell only if its centroid is inside AOI
+      - And overlap(cell ∩ AOI) / area(cell) >= min_overlap
+
+    Alignment (Option 2):
+      - If align_to_aoi_axis=True, rotate AOI to its main axis, build grid, rotate cells back.
+
+    Returns:
+      fc_cells : ee.FeatureCollection  (geometry is the *clipped* cell polygon = cell ∩ AOI)
+      geom     : ee.Geometry (AOI union) for map centering / buffering
     """
     plot_geojson_path = Path(plot_geojson_path)
     if not plot_geojson_path.exists():
@@ -314,20 +326,54 @@ def build_plot_grid_centroids(date_str, plot_geojson_path, cell_size_m):
 
     print(f"[GRID] Read AOI: {plot_geojson_path}")
     aoi = gpd.read_file(plot_geojson_path)
-
     if aoi.empty:
         raise RuntimeError("AOI file has no features.")
 
+    # dissolve to one geometry
     aoi = aoi.dissolve().reset_index(drop=True)
 
     utm_crs = aoi.estimate_utm_crs()
     aoi_utm = aoi.to_crs(utm_crs)
+    aoi_union = aoi_utm.geometry.unary_union
 
-    minx, miny, maxx, maxy = aoi_utm.total_bounds
+    # ---- Optional: align to AOI main axis (Option 2)
+    angle_deg = 0.0
+    origin_pt = (aoi_union.centroid.x, aoi_union.centroid.y)
+    aoi_for_grid = aoi_union
+
+    if align_to_aoi_axis:
+        try:
+            mrr = aoi_union.minimum_rotated_rectangle
+            coords = list(mrr.exterior.coords)
+
+            # find longest edge of the rotated rectangle -> grid axis
+            best_len = -1.0
+            best_angle = 0.0
+            for i in range(len(coords) - 1):
+                (x0, y0) = coords[i]
+                (x1, y1) = coords[i + 1]
+                dx, dy = (x1 - x0), (y1 - y0)
+                L = (dx * dx + dy * dy) ** 0.5
+                if L > best_len:
+                    best_len = L
+                    best_angle = math.degrees(math.atan2(dy, dx))
+
+            angle_deg = best_angle
+            # rotate AOI so its long axis becomes horizontal (x-axis)
+            aoi_for_grid = affinity.rotate(aoi_union, -angle_deg, origin=origin_pt)
+            print(f"[GRID] Align grid to AOI axis: rotate by {-angle_deg:.2f}°")
+        except Exception as e:
+            print(f"[GRID] Align-to-axis failed, continuing unrotated: {e}")
+            angle_deg = 0.0
+            aoi_for_grid = aoi_union
+
+    # bounds in the grid-building space (rotated or not)
+    minx, miny, maxx, maxy = aoi_for_grid.bounds
     n_cols = math.ceil((maxx - minx) / cell_size_m)
     n_rows = math.ceil((maxy - miny) / cell_size_m)
     print(f"[GRID] rows={n_rows}, cols={n_cols}, cell={cell_size_m} m")
 
+    # build full cells in rotated space
     grid_polys = []
     cell_ids = []
     for i in range(n_cols):
@@ -339,34 +385,64 @@ def build_plot_grid_centroids(date_str, plot_geojson_path, cell_size_m):
             grid_polys.append(box(x0, y0, x1, y1))
             cell_ids.append(f"{i:04d}_{j:04d}")
 
-    grid = gpd.GeoDataFrame(
-        {"cell_id": cell_ids, "geometry": grid_polys}, crs=utm_crs
-    )
+    grid = gpd.GeoDataFrame({"cell_id": cell_ids, "geometry": grid_polys}, crs=utm_crs)
 
-    print("[GRID] Clipping to AOI...")
-    grid_clip = gpd.overlay(grid, aoi_utm, how="intersection")
-    if grid_clip.empty:
+    # rotate cells back to original AOI orientation if needed
+    if align_to_aoi_axis and abs(angle_deg) > 1e-9:
+        grid["geometry"] = grid["geometry"].apply(lambda g: affinity.rotate(g, angle_deg, origin=origin_pt))
+
+    # ---- Option 1 inclusion rule (centroid-in + overlap)
+    cell_area = float(cell_size_m) * float(cell_size_m)
+
+    # First cheap filter: intersects AOI
+    grid = grid[grid.intersects(aoi_union)].copy()
+    if grid.empty:
         raise RuntimeError(
-            f"Clipped grid is empty for cell_size_m={cell_size_m}. "
-            "Try a larger cell size or check your AOI geometry."
+            f"Grid has no cells intersecting AOI for cell_size_m={cell_size_m}."
         )
 
-    aoi_4326 = aoi_utm.to_crs(epsg=4326)
-    grid_clip_4326 = grid_clip.to_crs(epsg=4326)
+    # centroid test
+    grid["centroid"] = grid.geometry.centroid
+    grid["centroid_in_aoi"] = grid["centroid"].within(aoi_union)
 
-    aoi_union = aoi_4326.geometry.unary_union
-    aoi_geojson = aoi_union.__geo_interface__
-    geom = ee.Geometry(aoi_geojson)
+    # overlap fraction (cell ∩ AOI)
+    inter_geom = grid.geometry.intersection(aoi_union)
+    grid["overlap_area"] = inter_geom.area
+    grid["overlap_frac"] = grid["overlap_area"] / cell_area
+
+    # keep cells
+    keep = grid["centroid_in_aoi"] & (grid["overlap_frac"] >= float(min_overlap))
+    grid_keep = grid.loc[keep].copy()
+
+    if grid_keep.empty:
+        raise RuntimeError(
+            f"No cells passed centroid/overlap rule for cell_size_m={cell_size_m}. "
+            f"Try lower min_overlap (current={min_overlap})."
+        )
+
+    # Use clipped geometry for EE sampling (keeps sampling within AOI)
+    grid_keep["geometry"] = grid_keep.geometry.intersection(aoi_union)
+
+    # Convert kept cells + centroids to EPSG:4326
+    grid_keep_4326 = grid_keep.to_crs(epsg=4326)
+
+    # AOI geometry for EE
+    aoi_4326 = gpd.GeoSeries([aoi_union], crs=utm_crs).to_crs(epsg=4326).iloc[0]
+    geom = ee.Geometry(aoi_4326.__geo_interface__)
 
     features = []
-    for _, row in grid_clip_4326.iterrows():
+    for _, row in grid_keep_4326.iterrows():
         poly = row.geometry
         if poly is None or poly.is_empty:
             continue
 
-        c = poly.centroid
-        lon = float(c.x)
-        lat = float(c.y)
+        # IMPORTANT: centroid from the *full cell*, not clipped piece
+        # (we stored centroid in UTM; convert it to 4326)
+        c_utm = row["centroid"]
+        c_wgs = gpd.GeoSeries([c_utm], crs=utm_crs).to_crs(epsg=4326).iloc[0]
+
+        lon = float(c_wgs.x)
+        lat = float(c_wgs.y)
 
         feat = ee.Feature(
             ee.Geometry(poly.__geo_interface__),
@@ -376,12 +452,13 @@ def build_plot_grid_centroids(date_str, plot_geojson_path, cell_size_m):
                 "lat": lat,
                 "date": date_str,
                 "Sheet": "plot_grid",
+                "overlap_frac": float(row.get("overlap_frac", 0.0)),
             },
         )
         features.append(feat)
 
     fc_cells = ee.FeatureCollection(features)
-    print(f"[GRID] Built {len(features)} cells in EE FeatureCollection.")
+    print(f"[GRID] Kept {len(features)} cells (min_overlap={min_overlap}, align={align_to_aoi_axis}).")
     return fc_cells, geom
 
 
@@ -420,9 +497,21 @@ def predict_sm_on_grid(
     init_earth_engine()
 
     # Build grid of cells inside plot
+    # fc_cells, geom = build_plot_grid_centroids(
+    #     date_target, plot_geojson_path, cell_size_m
+    # )
+    align_flag = os.environ.get("GRID_ALIGN_TO_FIELD", "0") == "1"      # Option 2
+    min_overlap = float(os.environ.get("GRID_MIN_OVERLAP", "0.50"))     # Option 1
+
     fc_cells, geom = build_plot_grid_centroids(
-        date_target, plot_geojson_path, cell_size_m
-    )
+        date_target,
+        plot_geojson_path,
+        cell_size_m,
+        min_overlap=min_overlap,
+        align_to_aoi_axis=align_flag,
+        )
+
+
     n_cells = fc_cells.size().getInfo()
     print(f"[INFER] grid cells (cell={cell_size_m} m): {n_cells}")
 

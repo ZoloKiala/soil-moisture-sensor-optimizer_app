@@ -26,4 +26,5 @@ urlpatterns = [
     # ),
 
     path("sensor-optimizer/report/", views.download_layout_report_view, name="download_layout_report"),
+path("sensor-optimizer/feedback/ajax/", views.feedback_ajax_view, name="feedback_ajax"),
 ]

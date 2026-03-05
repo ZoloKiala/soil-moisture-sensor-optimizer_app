@@ -7,12 +7,10 @@
 <title>Soil Moisture Sensor Optimization</title>
 
 <!-- Favicon -->
-  <link rel="icon" href="{% static 'sensor_optimizer/favicon.ico' %}">
-  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'sensor_optimizer/favicon-32x32.png' %}">
-  <link rel="icon" type="image/png" sizes="16x16" href="{% static 'sensor_optimizer/favicon-16x16.png' %}">
-  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'sensor_optimizer/apple-touch-icon.png' %}">
-
-
+<link rel="icon" href="{% static 'sensor_optimizer/favicon.ico' %}">
+<link rel="icon" type="image/png" sizes="32x32" href="{% static 'sensor_optimizer/favicon-32x32.png' %}">
+<link rel="icon" type="image/png" sizes="16x16" href="{% static 'sensor_optimizer/favicon-16x16.png' %}">
+<link rel="apple-touch-icon" sizes="180x180" href="{% static 'sensor_optimizer/apple-touch-icon.png' %}">
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
 <link rel="stylesheet" href="{% static 'sensor_optimizer/style.css' %}" />
@@ -35,8 +33,6 @@ border-radius:14px;
 overflow:hidden;
 border:1px solid #d1d5db;
 }
-
-
 
 h1,.h4{font-size:1.8rem!important}
 .text-muted{font-size:1.05rem}
@@ -187,7 +183,7 @@ border-radius:16px!important
   font-size: 0.95rem;
   color: rgba(15,23,42,0.75);
 }
-
+a.text-muted.small:hover { text-decoration: underline !important; }
 
 </style>
 </head>
@@ -195,139 +191,213 @@ border-radius:16px!important
 <body>
 
 <!-- SPLASH -->
-
 <div id="startup-overlay" class="splash-overlay">
-<div class="splash-center">
-<div class="splash-emoji">🌱</div>
-<div class="splash-title">Soil Moisture Sensor Optimization</div>
+  <div class="splash-center">
+    <div class="splash-emoji">🌱</div>
+    <div class="splash-title">Soil Moisture Sensor Optimization</div>
 
-<div class="splash-bars">
-<span></span><span></span><span></span>
-</div>
-
-</div>
+    <div class="splash-bars">
+      <span></span><span></span><span></span>
+    </div>
+  </div>
 </div>
 
 <!-- BUSY -->
-
 <div id="loading-overlay" class="busy-overlay hidden">
-<div class="busy-box">
-<div class="spinner"></div>
-<div class="busy-text">
-Running Earth Engine optimization…<br>
-<span>This may take a moment.</span>
-</div>
-</div>
+  <div class="busy-box">
+    <div class="spinner"></div>
+    <div class="busy-text">
+      Running Earth Engine optimization…<br>
+      <span>This may take a moment.</span>
+    </div>
+  </div>
 </div>
 
 <div class="container my-4">
-<div class="row justify-content-center">
-<div class="col-lg-10">
+  <div class="row justify-content-center">
+    <div class="col-lg-10">
 
-<div class="card shadow-sm">
-<div class="card-body">
+      <div class="card shadow-sm">
+        <div class="card-body">
 
-<h1 class="h4 text-center mb-1"
-style="font-size:3rem!important;font-weight:900!important">
-🌱 Soil Moisture Sensor Optimization
-</h1>
+          <h1 class="h4 text-center mb-1"
+              style="font-size:3rem!important;font-weight:900!important">
+            🌱 Soil Moisture Sensor Optimization
+          </h1>
 
-<p class="text-center text-muted mb-4 header-subtitle"
-style="font-size:1.45rem!important">
-Sentinel-1 + ExtraTrees — determine optimal sensor grid size that minimizes soil moisture variability.
-</p>
+          <p class="text-center text-muted mb-4 header-subtitle"
+             style="font-size:1.45rem!important">
+            Sentinel-1 + ExtraTrees — determine optimal sensor grid size that minimizes soil moisture variability.
+          </p>
 
-{% if error %}
-<div class="alert alert-danger py-2">{{ error }}</div>
-{% endif %}
+          {% if error %}
+            <div class="alert alert-danger py-2">{{ error }}</div>
+          {% endif %}
 
-<form id="optimizer-form"
-method="post"
-enctype="multipart/form-data"
-action="{% url 'sensor_optimizer:sensor_optimizer' %}">
+          <form id="optimizer-form"
+                method="post"
+                enctype="multipart/form-data"
+                action="{% url 'sensor_optimizer:sensor_optimizer' %}">
 
-{% csrf_token %}
+            {% csrf_token %}
 
-<input type="hidden" name="drawn_geojson" id="drawn_geojson"/>
-<input type="hidden" name="cell_sizes" value="AUTO">
+            <input type="hidden" name="drawn_geojson" id="drawn_geojson"/>
+            <input type="hidden" name="cell_sizes" value="AUTO">
 
-<div class="row">
+            <div class="row">
 
-<div class="col-md-6 border-end">
+              <div class="col-md-6 border-end">
 
-<h2 class="h6 mb-3">📥 Inputs</h2>
+                <h2 class="h6 mb-3">📥 Inputs</h2>
 
-<div class="mb-3">
-<label class="form-label">Target date (YYYY-MM-DD)</label>
+                <div class="mb-3">
+                  <label class="form-label">Target date (YYYY-MM-DD)</label>
+                  <input
+                    type="date"
+                    class="form-control"
+                    name="date_target"
+                    value="{% now 'Y-m-d' %}"
+                    required>
+                </div>
 
-<input
-type="date"
-class="form-control"
-name="date_target"
-value="{% now 'Y-m-d' %}"
-required>
+                <div class="mb-3">
+                  <label class="form-label">Field polygon GeoJSON (optional)</label>
+                  <input
+                    type="file"
+                    class="form-control"
+                    id="id_geojson_file"
+                    name="geojson_file"
+                    accept=".geojson,application/json">
+
+                  <div class="form-text">
+                    Optional: upload GeoJSON instead of drawing polygon.
+                  </div>
+                </div>
+
+                <div class="d-grid mt-4">
+                  <button type="submit" class="btn btn-success w-100 btn-run-big">
+                    ▶ Run sensor optimization
+                  </button>
+                </div>
+
+              </div>
+
+              <div class="col-md-6">
+
+                <h2 class="h6 mb-3">🗺️ Draw field polygon</h2>
+
+                <p class="small text-muted">
+                  Draw your field boundary using the polygon tool.
+                </p>
+
+                <div class="map-preview-wrapper mb-2">
+
+                  {% if drawer_map_body %}
+                    {% autoescape off %}{{ drawer_map_body }}{% endautoescape %}
+                  {% endif %}
+
+                </div>
+
+                {% if drawer_map_script %}
+                  {% autoescape off %}
+                    <script>
+                      {{ drawer_map_script }}
+                    </script>
+                  {% endautoescape %}
+                {% endif %}
+
+                <div id="draw-status" class="small text-muted mt-2">
+                  Status: <span id="draw-status-text">Waiting for map…</span>
+                </div>
+
+              </div>
+            </div>
+          </form>
+
+          <hr class="my-4">
+
+          <div class="text-end">
+            <a href="javascript:void(0)" class="text-muted small text-decoration-none"
+               data-bs-toggle="modal" data-bs-target="#feedbackModal">
+              💬 Feedback
+            </a>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
 </div>
 
-<div class="mb-3">
-<label class="form-label">Field polygon GeoJSON (optional)</label>
+<!-- FEEDBACK MODAL -->
+<div class="modal fade" id="feedbackModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Send feedback</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
 
-<input
-type="file"
-class="form-control"
-id="id_geojson_file"
-name="geojson_file"
-accept=".geojson,application/json">
+      <form id="feedback-form">
+        <div class="modal-body">
 
-<div class="form-text">
-Optional: upload GeoJSON instead of drawing polygon.
-</div>
+          <!-- messages -->
+          <div id="fb-alert" class="alert alert-success d-none">
+            Thanks! Your feedback was sent.
+          </div>
+          <div id="fb-error" class="alert alert-danger d-none"></div>
 
-</div>
+          {% csrf_token %}
 
-<div class="d-grid mt-4">
-<button type="submit" class="btn btn-success w-100 btn-run-big">
-▶ Run sensor optimization
-</button>
-</div>
+          <!-- honeypot (hidden) -->
+          <div class="d-none">
+            <label>Website</label>
+            <input type="text" name="website" class="form-control" autocomplete="off">
+          </div>
 
-</div>
+          <input type="hidden" name="page" id="fb-page" value="">
 
-<div class="col-md-6">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Name (optional)</label>
+              <input type="text" name="name" class="form-control">
+            </div>
 
-<h2 class="h6 mb-3">🗺️ Draw field polygon</h2>
+            <div class="col-md-6">
+              <label class="form-label">Email (optional)</label>
+              <input type="email" name="email" class="form-control">
+              <div class="form-text">Only if you want a reply.</div>
+            </div>
 
-<p class="small text-muted">
-Draw your field boundary using the polygon tool.
-</p>
+            <div class="col-md-4">
+              <label class="form-label">Rating</label>
+              <select name="rating" class="form-select">
+                <option value="5" selected>5</option>
+                <option value="4">4</option>
+                <option value="3">3</option>
+                <option value="2">2</option>
+                <option value="1">1</option>
+              </select>
+              <div class="form-text">1 (bad) → 5 (great)</div>
+            </div>
 
-<div class="map-preview-wrapper mb-2">
+            <div class="col-12">
+              <label class="form-label">Message</label>
+              <textarea name="message" class="form-control" rows="5" required></textarea>
+              <div class="form-text">Don’t paste secrets/keys here.</div>
+            </div>
+          </div>
 
-{% if drawer_map_body %}
-{% autoescape off %}{{ drawer_map_body }}{% endautoescape %}
-{% endif %}
+        </div>
 
-</div>
-
-{% if drawer_map_script %}
-{% autoescape off %}
-<script>
-{{ drawer_map_script }}
-</script>
-{% endautoescape %}
-{% endif %}
-
-<div id="draw-status" class="small text-muted mt-2">
-Status: <span id="draw-status-text">Waiting for map…</span>
-</div>
-
-</div>
-</div>
-</form>
-</div>
-</div>
-
-</div>
-</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+          <button id="fb-submit" type="submit" class="btn btn-success">Send</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -372,12 +442,10 @@ document.addEventListener("DOMContentLoaded", function () {
      ----------------------------- */
 
   function findLeafletMap() {
-    // if you set this in python (recommended), we'll pick it up
     if (window.__SENSOR_OPTIMIZER_MAP__) return window.__SENSOR_OPTIMIZER_MAP__;
-
+    if_MAP__;
     if (!window.L || !L.Map) return null;
 
-    // Try to find the first Leaflet map object on window (Folium creates map_xxxxx variables)
     for (const k of Object.keys(window)) {
       try {
         const v = window[k];
@@ -416,7 +484,6 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 
-  // fallback: try extract any polygon from existing map layers (useful if draw events didn't fire)
   function tryExtractPolygonFromMap(map) {
     let found = false;
     try {
@@ -437,7 +504,6 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function attachDrawListeners(map) {
-    // Leaflet.draw must exist (it should, from your Folium header/plugins)
     if (!window.L || !window.L.Draw) {
       if (statusText) statusText.textContent = "Leaflet.draw not found.";
       return;
@@ -462,12 +528,11 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function addSearchControl(map) {
-    // Leaflet Control Geocoder
     if (!window.L || !L.Control || !L.Control.Geocoder) return;
     if (map.__geocoderAdded) return;
     map.__geocoderAdded = true;
 
-    const geocoder = L.Control.geocoder({
+    L.Control.geocoder({
       position: "topright",
       defaultMarkGeocode: false,
       placeholder: "Search place…",
@@ -492,7 +557,6 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    // expose for your other code / debugging
     window.__SENSOR_OPTIMIZER_MAP__ = map;
 
     attachDrawListeners(map);
@@ -501,7 +565,6 @@ document.addEventListener("DOMContentLoaded", function () {
     if (statusText) statusText.textContent = "Map ready — draw a polygon.";
   })();
 
-  /* submit validation (your logic kept, plus polygon fallback) */
   form.addEventListener("submit", function (e) {
     const hasUpload = uploadInput && uploadInput.files && uploadInput.files.length > 0;
 
@@ -520,6 +583,81 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
 });
+</script>
+
+<!-- Feedback modal AJAX -->
+<script>
+(function () {
+  const modalEl = document.getElementById("feedbackModal");
+  const fbForm  = document.getElementById("feedback-form");
+  if (!modalEl || !fbForm) return;
+
+  const okBox   = document.getElementById("fb-alert");
+  const errBox  = document.getElementById("fb-error");
+  const btn     = document.getElementById("fb-submit");
+  const pageInp = document.getElementById("fb-page");
+
+  function csrfTokenFromForm() {
+    const inp = fbForm.querySelector('input[name="csrfmiddlewaretoken"]');
+    return inp ? inp.value : "";
+  }
+
+  function showError(msg) {
+    if (!errBox) return;
+    errBox.textContent = msg || "Could not send feedback. Please try again.";
+    errBox.classList.remove("d-none");
+  }
+
+  modalEl.addEventListener("show.bs.modal", function () {
+    if (pageInp) pageInp.value = window.location.pathname;
+    if (okBox) okBox.classList.add("d-none");
+    if (errBox) { errBox.classList.add("d-none"); errBox.textContent = ""; }
+  });
+
+  fbForm.addEventListener("submit", async function (e) {
+    e.preventDefault();
+
+    if (okBox) okBox.classList.add("d-none");
+    if (errBox) { errBox.classList.add("d-none"); errBox.textContent = ""; }
+
+    if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+
+    try {
+      const resp = await fetch("{% url 'sensor_optimizer:feedback_ajax' %}", {
+        method: "POST",
+        headers: { "X-CSRFToken": csrfTokenFromForm() },
+        body: new FormData(fbForm),
+      });
+
+      const data = await resp.json().catch(() => ({}));
+
+      if (resp.ok && data.ok) {
+        if (okBox) okBox.classList.remove("d-none");
+        fbForm.reset();
+        if (pageInp) pageInp.value = window.location.pathname;
+        return;
+      }
+
+      if (data && data.errors) {
+        const keys = Object.keys(data.errors);
+        if (keys.length) {
+          const first = keys[0];
+          const msg = Array.isArray(data.errors[first]) ? data.errors[first][0] : String(data.errors[first]);
+          showError(msg);
+        } else {
+          showError("Please check your inputs.");
+        }
+      } else {
+        showError("Please check your inputs.");
+      }
+
+    } catch (err) {
+      showError("Could not send feedback. Please try again.");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Send"; }
+    }
+  });
+})();
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

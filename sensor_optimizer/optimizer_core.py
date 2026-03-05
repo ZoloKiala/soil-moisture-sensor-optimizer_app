@@ -10,6 +10,38 @@ from .gee_soil_moisture import predict_sm_on_grid
 CV_TOLERANCE = float(2.0)  # percentage points
 
 
+import pandas as pd
+
+def choose_best_row(summary_df: pd.DataFrame, cv_good_threshold: float = 10.0, tol_pct: float = 2.0) -> dict:
+    """
+    Rule:
+      1) If any cv_percent < cv_good_threshold -> choose lowest n_sensors, then lowest cv_percent.
+      2) Else fallback: choose lowest cv_percent (optionally with tolerance: choose lowest n_sensors within tol_pct of best CV).
+    """
+    df = summary_df.copy()
+
+    # robust numeric
+    df["cv_percent"] = pd.to_numeric(df.get("cv_percent"), errors="coerce")
+    df["n_sensors"] = pd.to_numeric(df.get("n_sensors"), errors="coerce")
+    df["cell_size_m"] = pd.to_numeric(df.get("cell_size_m"), errors="coerce")
+
+    df = df.dropna(subset=["cv_percent", "n_sensors", "cell_size_m"])
+    df["n_sensors"] = df["n_sensors"].astype(int)
+
+    # 1) If any CV < 10%: minimize sensors, then CV
+    good = df[df["cv_percent"] < float(cv_good_threshold)]
+    if not good.empty:
+        best = good.sort_values(["n_sensors", "cv_percent", "cell_size_m"], ascending=[True, True, False]).iloc[0]
+        return best.to_dict()
+
+    # 2) Fallback: min CV, then smallest sensors (within tolerance)
+    best_cv = float(df["cv_percent"].min())
+    cutoff = best_cv * (1.0 + float(tol_pct) / 100.0)  # keep your tolerance behaviour
+    cand = df[df["cv_percent"] <= cutoff]
+    best = cand.sort_values(["n_sensors", "cv_percent", "cell_size_m"], ascending=[True, True, False]).iloc[0]
+    return best.to_dict()
+
+
 def parse_cell_sizes(cell_sizes_str: str) -> list[int]:
     """
     Robust parser.
@@ -64,6 +96,7 @@ def _normalize_cell_sizes(cell_sizes) -> list[int]:
     return parse_cell_sizes(str(cell_sizes))
 
 
+
 def run_sensor_optimization(date_target: str, geojson_path: str, cell_sizes):
     """
     cell_sizes can be:
@@ -72,9 +105,11 @@ def run_sensor_optimization(date_target: str, geojson_path: str, cell_sizes):
 
     Returns:
       summary_df     : columns = cell_size_m, n_sensors, cv_percent
-      best_row       : dict with chosen configuration using tolerance rule
+      best_row       : dict with chosen configuration using new rule + tolerance fallback
       centroid_data  : dict[str(cell_size_m)] -> list-of-dicts rows (lon, lat, sm_pred, ...)
     """
+    CV_GOOD_THRESHOLD = 10.0  # %  ✅ new rule threshold
+
     cell_sizes_list = _normalize_cell_sizes(cell_sizes)
 
     cvs = []
@@ -113,8 +148,30 @@ def run_sensor_optimization(date_target: str, geojson_path: str, cell_sizes):
         .reset_index(drop=True)
     )
 
+    # -------------------------
+    # ✅ NEW best-grid rule
+    # -------------------------
+    # If any CV < 10% -> pick lowest n_sensors, then lowest CV
+    good = summary_df[summary_df["cv_percent"] < CV_GOOD_THRESHOLD].copy()
+    if not good.empty:
+        best = (
+            good.sort_values(["n_sensors", "cv_percent", "cell_size_m"], ascending=[True, True, False])
+            .iloc[0]
+            .to_dict()
+        )
+        return summary_df, best, centroid_data
+
+    # Otherwise -> your usual tolerance rule (min CV + CV_TOLERANCE), then lowest n_sensors, then lowest CV
     min_cv = float(summary_df["cv_percent"].min())
     candidates = summary_df[summary_df["cv_percent"] <= (min_cv + CV_TOLERANCE)].copy()
-    best = candidates.sort_values("n_sensors").iloc[0].to_dict()
+
+    if candidates.empty:
+        candidates = summary_df.copy()
+
+    best = (
+        candidates.sort_values(["n_sensors", "cv_percent", "cell_size_m"], ascending=[True, True, False])
+        .iloc[0]
+        .to_dict()
+    )
 
     return summary_df, best, centroid_data

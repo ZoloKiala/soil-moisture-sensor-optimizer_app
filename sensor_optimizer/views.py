@@ -47,6 +47,16 @@ from django.http import Http404
 from django.shortcuts import render, redirect
 from django.urls import reverse
 
+from django.contrib import messages
+
+
+from django.http import JsonResponse
+from django.views.decorators.http import require_POST
+from django.views.decorators.csrf import csrf_protect
+
+from .forms import FeedbackForm
+
+
 RUNS_DIR = Path(tempfile.gettempdir()) / "smso_runs"
 
 def _cleanup_old_runs(max_age_seconds=6 * 3600):
@@ -1219,3 +1229,18 @@ def download_layout_report_view(request):
     resp = HttpResponse(buffer.getvalue(), content_type="application/pdf")
     resp["Content-Disposition"] = f'attachment; filename="sensor_layout_report_{date_target}.pdf"'
     return resp
+
+
+
+@require_POST
+@csrf_protect
+def feedback_ajax_view(request):
+    form = FeedbackForm(request.POST)
+    if form.is_valid():
+        fb = form.save(commit=False)
+        fb.page = (request.POST.get("page") or "")[:200]
+        fb.user_agent = (request.META.get("HTTP_USER_AGENT") or "")[:300]
+        fb.save()
+        return JsonResponse({"ok": True})
+
+    return JsonResponse({"ok": False, "errors": form.errors}, status=400)
