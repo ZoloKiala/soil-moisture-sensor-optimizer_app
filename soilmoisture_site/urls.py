@@ -28,3 +28,7 @@ urlpatterns = [
 ]
 
 
+handler404 = "soilmoisture_site.views.error_404"
+handler500 = "soilmoisture_site.views.error_500"
+
+
