@@ -25,9 +25,9 @@ height:420px!important;
 border-radius:14px;
 overflow:hidden;
 border:1px solid #d1d5db;
+}
 
-html{font-size:30px}
-body{font-size:1.05rem}
+
 
 h1,.h4{font-size:1.8rem!important}
 .text-muted{font-size:1.05rem}
@@ -48,8 +48,6 @@ margin-bottom:.35rem!important
 .header-subtitle{
 font-size:1.2rem!important;
 line-height:1.35!important
-}
-
 }
 
 /* SPLASH */
@@ -200,7 +198,7 @@ action="{% url 'sensor_optimizer:sensor_optimizer' %}">
 type="date"
 class="form-control"
 name="date_target"
-value="{{ date_target|default_if_none:''|default:''|add:'' }}{% if not date_target %}{% now 'Y-m-d' %}{% endif %}"
+value="{% now 'Y-m-d' %}"
 required>
 </div>
 
@@ -246,15 +244,9 @@ Draw your field boundary using the polygon tool.
 
 {% if drawer_map_script %}
 {% autoescape off %}
-
-{% if "<script" in drawer_map_script %}
-{{ drawer_map_script }}
-{% else %}
 <script>
 {{ drawer_map_script }}
 </script>
-{% endif %}
-
 {% endautoescape %}
 {% endif %}
 
@@ -282,48 +274,28 @@ const hiddenGeo=document.getElementById("drawn_geojson")
 const uploadInput=document.getElementById("id_geojson_file")
 const statusText=document.getElementById("draw-status-text")
 
-/* SPLASH */
+/* SPLASH CONTROL */
 
-const splash = document.getElementById("startup-overlay");
+const splash=document.getElementById("startup-overlay")
+const params=new URLSearchParams(window.location.search)
+const skipSplash=params.get("nosplash")==="1"
 
-let splashStart = performance.now();
-const MIN_SPLASH_MS = 1800;
-
-// If user came from results page, skip splash
-if (document.referrer && document.referrer.includes("sensor_optimizer_map")) {
-
-  if (splash) splash.remove();
-
-} else {
-
-  document.documentElement.classList.add("splash-lock");
-  document.body.classList.add("splash-lock");
-
-}
-
-
-function hideSplash(){
-
-if(!splash||!document.body.contains(splash))return
-
-const elapsed=performance.now()-splashStart
-const wait=Math.max(0,MIN_SPLASH_MS-elapsed)
+if(skipSplash && splash){
+splash.remove()
+}else{
+document.documentElement.classList.add("splash-lock")
+document.body.classList.add("splash-lock")
 
 setTimeout(()=>{
-
+if(splash){
 splash.classList.add("hidden")
-
 setTimeout(()=>{
-
-if(splash)splash.remove()
-
+splash.remove()
 document.documentElement.classList.remove("splash-lock")
 document.body.classList.remove("splash-lock")
-
-},800)
-
-},wait)
-
+},700)
+}
+},1800)
 }
 
 /* spinner */
@@ -332,157 +304,14 @@ function showOverlay(){
 if(overlay)overlay.classList.remove("hidden")
 }
 
-/* wait for map */
-
-function waitForMap(maxMs=7000,stepMs=100){
-
-return new Promise(resolve=>{
-
-const start=Date.now()
-
-const t=setInterval(()=>{
-
-const map=window.__SENSOR_OPTIMIZER_MAP__
-
-if(map){
-clearInterval(t)
-resolve(map)
-return
-}
-
-if(Date.now()-start>maxMs){
-clearInterval(t)
-resolve(null)
-}
-
-},stepMs)
-
-})
-
-}
-
-/* search */
-
-function addSearchControl(map){
-
-if(!map||!window.L)return
-if(map.__searchAdded)return
-
-map.__searchAdded=true
-
-const geocoder=L.Control.geocoder({
-collapsed:true,
-position:"topleft",
-placeholder:"Search location..."
-})
-
-.on("markgeocode",function(e){
-
-if(e.geocode&&e.geocode.bbox){
-map.fitBounds(e.geocode.bbox)
-}
-
-})
-
-geocoder.addTo(map)
-
-}
-
-/* draw */
-
-function attachDrawListeners(map){
-
-if(!window.L||!window.L.Draw){
-if(statusText)statusText.textContent="Leaflet.draw not found."
-return
-}
-
-if(map.__drawListenersAttached)return
-map.__drawListenersAttached=true
-
-function setGeoJSONFromLayer(layer){
-
-try{
-
-const feat=layer.toGeoJSON()
-
-if(!feat||!feat.geometry)return
-if(feat.geometry.type!=="Polygon"&&feat.geometry.type!=="MultiPolygon")return
-
-hiddenGeo.value=JSON.stringify({
-type:"FeatureCollection",
-features:[feat]
-})
-
-if(statusText)statusText.textContent="Polygon captured ✅"
-
-}catch(e){console.log(e)}
-
-}
-
-map.on(L.Draw.Event.CREATED,function(e){
-setGeoJSONFromLayer(e.layer)
-})
-
-map.on(L.Draw.Event.EDITED,function(e){
-
-let first=null
-
-e.layers.eachLayer(function(layer){
-if(!first)first=layer
-})
-
-if(first)setGeoJSONFromLayer(first)
-
-})
-
-map.on(L.Draw.Event.DELETED,function(){
-
-hiddenGeo.value=""
-
-if(statusText)statusText.textContent="No polygon captured yet."
-
-})
-
-}
-
-/* init */
-
-(async function(){
-
-const map=await waitForMap()
-
-if(!map){
-
-if(statusText)statusText.textContent="Map not detected."
-hideSplash()
-return
-
-}
-
-addSearchControl(map)
-attachDrawListeners(map)
-map.invalidateSize()
-
-if(statusText)statusText.textContent="Map ready — draw a polygon."
-
-hideSplash()
-
-})()
-
-window.addEventListener("load",hideSplash)
-setTimeout(hideSplash,12000)
-
 form.addEventListener("submit",function(e){
 
 const hasUpload=uploadInput&&uploadInput.files&&uploadInput.files.length>0
 
 if(!hasUpload&&!hiddenGeo.value){
-
 e.preventDefault()
 alert("Please draw a polygon on the map OR upload a GeoJSON file.")
 return
-
 }
 
 showOverlay()
