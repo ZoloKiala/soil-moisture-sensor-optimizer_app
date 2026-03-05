@@ -16,7 +16,15 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import include, path
+from django.shortcuts import redirect
+
+
+def root_redirect(request):
+    return redirect("/sensor-optimizer/")
 
 urlpatterns = [
+    path("", root_redirect),  # homepage redirect
     path("", include(("sensor_optimizer.urls", "sensor_optimizer"), namespace="sensor_optimizer")),
 ]
+
+
