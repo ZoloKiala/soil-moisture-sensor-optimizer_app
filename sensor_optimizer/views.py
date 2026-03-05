@@ -802,7 +802,6 @@ import pandas as pd
 
 # ... your other imports + helpers stay the same ...
 
-
 def sensor_optimizer_view(request):
     """
     GET  -> show form + inline folium drawer map
@@ -900,11 +899,53 @@ def sensor_optimizer_view(request):
             },
         )
 
+    # ✅ NEW: enforce AOI area limits (min 100 m², max 30 ha)
+    MIN_AREA_M2 = 100.0
+    MAX_AREA_M2 = 30.0 * 10000.0  # 30 ha = 300,000 m²
+    try:
+        area_m2, area_ha = compute_aoi_area(geojson_tmp_path)
+    except Exception as e:
+        return render(
+            request,
+            "sensor_optimizer/form.html",
+            {
+                "drawer_map_header": drawer_map_header,
+                "drawer_map_body": drawer_map_body,
+                "drawer_map_script": drawer_map_script,
+                "drawer_map_name": drawer_map_name,
+                "error": f"Could not compute field area from polygon: {e}",
+                "date_target": date_target,
+                "cell_sizes": "AUTO",
+            },
+        )
+
+    if area_m2 < MIN_AREA_M2 or area_m2 > MAX_AREA_M2:
+        return render(
+            request,
+            "sensor_optimizer/form.html",
+            {
+                "drawer_map_header": drawer_map_header,
+                "drawer_map_body": drawer_map_body,
+                "drawer_map_script": drawer_map_script,
+                "drawer_map_name": drawer_map_name,
+                "error": (
+                    "Field area must be between 100 m² (0.01 ha) and 30 ha. "
+                    f"Your polygon is {area_m2:,.0f} m² ({area_ha:,.2f} ha)."
+                ),
+                "date_target": date_target,
+                "cell_sizes": "AUTO",
+            },
+        )
+
     # Save AOI in session for preview map outline + fit bounds (keep your behavior)
     try:
         request.session["aoi_geojson"] = _aoi_geojson_dict_from_path(geojson_tmp_path)
     except Exception:
         request.session["aoi_geojson"] = None
+
+    # store area early (useful even if later steps fail)
+    request.session["aoi_area_m2"] = float(area_m2)
+    request.session["aoi_area_ha"] = float(area_ha)
 
     # Auto cell sizes
     try:
@@ -988,9 +1029,10 @@ def sensor_optimizer_view(request):
             max_cells=1500,
         )
         centroids_geojson = centroids_geojson_by_size(centroid_data)
-        area_m2, area_ha = compute_aoi_area(geojson_tmp_path)
-        request.session["aoi_area_m2"] = area_m2
-        request.session["aoi_area_ha"] = area_ha
+
+        # ✅ area_m2/area_ha already computed and stored
+        # request.session["aoi_area_m2"] = area_m2
+        # request.session["aoi_area_ha"] = area_ha
 
         # ✅ KEY FIX: PRG (POST -> Redirect -> GET) to avoid "Resubmit the form?"
         ctx = {
@@ -1025,7 +1067,6 @@ def sensor_optimizer_view(request):
                 "cell_sizes": "AUTO",
             },
         )
-
 
 
 def centroid_map_view(request):
