@@ -36,6 +36,80 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from .optimizer_core import run_sensor_optimization  # (summary_df, best_row, centroid_data)
 
 
+import base64
+import json
+import tempfile
+import time
+import uuid
+from pathlib import Path
+
+from django.http import Http404
+from django.shortcuts import render, redirect
+from django.urls import reverse
+
+RUNS_DIR = Path(tempfile.gettempdir()) / "smso_runs"
+
+def _cleanup_old_runs(max_age_seconds=6 * 3600):
+    """Delete old runs from /tmp to avoid unlimited growth."""
+    try:
+        if not RUNS_DIR.exists():
+            return
+        now = time.time()
+        for p in RUNS_DIR.iterdir():
+            if p.is_dir() and (now - p.stat().st_mtime) > max_age_seconds:
+                for f in p.glob("*"):
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
+                try:
+                    p.rmdir()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+def _save_run_payload(ctx: dict) -> str:
+    _cleanup_old_runs()
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+    run_id = uuid.uuid4().hex
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save plot as png (avoid huge JSON/session)
+    plot_b64 = (ctx.get("plot_png_base64") or "").strip()
+    if plot_b64:
+        (run_dir / "plot.png").write_bytes(base64.b64decode(plot_b64))
+    ctx2 = dict(ctx)
+    ctx2.pop("plot_png_base64", None)
+
+    # Save everything else as JSON (GeoJSON dicts are fine)
+    (run_dir / "data.json").write_text(json.dumps(ctx2, default=str), encoding="utf-8")
+    return run_id
+
+def _load_run_payload(run_id: str) -> dict:
+    run_dir = RUNS_DIR / run_id
+    data_path = run_dir / "data.json"
+    if not data_path.exists():
+        raise Http404("Result not found (expired). Please run optimization again.")
+
+    ctx = json.loads(data_path.read_text(encoding="utf-8"))
+    plot_path = run_dir / "plot.png"
+    if plot_path.exists():
+        ctx["plot_png_base64"] = base64.b64encode(plot_path.read_bytes()).decode("utf-8")
+    else:
+        ctx["plot_png_base64"] = ""
+    ctx["run_id"] = run_id
+    return ctx
+
+def results_view(request, run_id: str):
+    ctx = _load_run_payload(run_id)
+    return render(request, "sensor_optimizer/results.html", ctx)
+
+
+
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
@@ -722,6 +796,13 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
 # Views
 # -----------------------------------------------------------------------------
 
+from datetime import date
+import json
+import pandas as pd
+
+# ... your other imports + helpers stay the same ...
+
+
 def sensor_optimizer_view(request):
     """
     GET  -> show form + inline folium drawer map
@@ -739,8 +820,8 @@ def sensor_optimizer_view(request):
                 "drawer_map_body": drawer_map_body,
                 "drawer_map_script": drawer_map_script,
                 "drawer_map_name": drawer_map_name,
-                "date_target": date.today().isoformat(),  # ✅ today
-                "date_target": "",
+                # ✅ FIX: you had date_target twice (today then ""), so it always became ""
+                "date_target": date.today().isoformat(),
                 "cell_sizes": "AUTO",
             },
         )
@@ -819,7 +900,7 @@ def sensor_optimizer_view(request):
             },
         )
 
-    # Save AOI in session for preview map outline + fit bounds
+    # Save AOI in session for preview map outline + fit bounds (keep your behavior)
     try:
         request.session["aoi_geojson"] = _aoi_geojson_dict_from_path(geojson_tmp_path)
     except Exception:
@@ -827,8 +908,7 @@ def sensor_optimizer_view(request):
 
     # Auto cell sizes
     try:
-       cell_sizes_list = auto_cell_sizes_for_polygon(geojson_tmp_path, min_sensors=2, max_sensors=800)
-
+        cell_sizes_list = auto_cell_sizes_for_polygon(geojson_tmp_path, min_sensors=2, max_sensors=800)
     except Exception as e:
         return render(
             request,
@@ -894,13 +974,13 @@ def sensor_optimizer_view(request):
 
         cell_size_options = [{"value": int(v), "label": f"{int(v)} m"} for v in cell_sizes_list]
 
-        # Store for map preview + PDF
+        # Store for map preview + PDF (keep your endpoints working)
         request.session["date_target"] = date_target
         request.session["summary_records"] = summary_df.to_dict(orient="records")
         request.session["best_row"] = best_row
         request.session["centroid_data"] = centroid_data
 
-        # Optional: overlays for results "candidate grids" map (if your results.html uses them)
+        # Optional overlays for results
         aoi_geojson = request.session.get("aoi_geojson") or _aoi_geojson_dict_from_path(geojson_tmp_path)
         grid_geojson_by_size = grid_overlays_geojson_by_size(
             geojson_tmp_path,
@@ -911,26 +991,25 @@ def sensor_optimizer_view(request):
         area_m2, area_ha = compute_aoi_area(geojson_tmp_path)
         request.session["aoi_area_m2"] = area_m2
         request.session["aoi_area_ha"] = area_ha
-        
-        return render(
-            request,
-            "sensor_optimizer/results.html",
-            {
-                "date_target": date_target,
-                "plot_png_base64": plot_png_base64,
-                "summary_rows": summary_rows,
-                "cell_size_options": cell_size_options,
-                "optimal_cell_size": optimal_cell_size,
-                "optimal_n": optimal_n,
-                "optimal_cv": optimal_cv,
-                "area_m2": area_m2,
-                "area_ha": area_ha,
-                # If your results.html includes the "candidate grids within AOI" map:
-                "aoi_geojson": aoi_geojson,
-                "grid_geojson_by_size": grid_geojson_by_size,
-                "centroids_geojson_by_size": centroids_geojson,
-            },
-        )
+
+        # ✅ KEY FIX: PRG (POST -> Redirect -> GET) to avoid "Resubmit the form?"
+        ctx = {
+            "date_target": date_target,
+            "plot_png_base64": plot_png_base64,
+            "summary_rows": summary_rows,
+            "cell_size_options": cell_size_options,
+            "optimal_cell_size": optimal_cell_size,
+            "optimal_n": optimal_n,
+            "optimal_cv": optimal_cv,
+            "area_m2": area_m2,
+            "area_ha": area_ha,
+            "aoi_geojson": aoi_geojson,
+            "grid_geojson_by_size": grid_geojson_by_size,
+            "centroids_geojson_by_size": centroids_geojson,
+        }
+
+        run_id = _save_run_payload(ctx)
+        return redirect(reverse("sensor_optimizer:sensor_optimizer_results", kwargs={"run_id": run_id}))
 
     except Exception as e:
         return render(
@@ -946,6 +1025,7 @@ def sensor_optimizer_view(request):
                 "cell_sizes": "AUTO",
             },
         )
+
 
 
 def centroid_map_view(request):
