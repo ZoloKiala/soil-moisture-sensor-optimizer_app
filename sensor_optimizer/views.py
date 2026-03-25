@@ -502,8 +502,30 @@ def make_drawer_map_html(center_lat: float = -23.0, center_lon: float = 30.0, zo
     m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, tiles=None, control_scale=True)
     m.add_to(fig)
 
-    osm_layer = folium.TileLayer("OpenStreetMap", name="OpenStreetMap", control=True, show=True).add_to(m)
     sat_layer = folium.TileLayer(
+        tiles="https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri, Maxar, Earthstar Geographics",
+        name="Satellite",
+        control=True,
+        show=True,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
+        attr="&copy; OpenStreetMap contributors &copy; CARTO",
+        name="Hybrid labels",
+        overlay=True,
+        control=False,
+        show=True,
+    ).add_to(m)
+    osm_layer = folium.TileLayer("OpenStreetMap", name="OpenStreetMap", control=True, show=False).add_to(m)
+    topo_layer = folium.TileLayer(
+        tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        attr="Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap (CC-BY-SA)",
+        name="OpenTopoMap",
+        control=True,
+        show=False,
+    ).add_to(m)
+    light_layer = folium.TileLayer(
         tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
         attr="&copy; OpenStreetMap contributors &copy; CARTO",
         name="Carto Light",
@@ -540,7 +562,8 @@ def make_drawer_map_html(center_lat: float = -23.0, center_lon: float = 30.0, zo
     root = fig.get_root()
     map_js_name = m.get_name()
     osm_js_name = osm_layer.get_name()
-    sat_js_name = sat_layer.get_name()
+    topo_js_name = topo_layer.get_name()
+    light_js_name = light_layer.get_name()
 
     root.render()
 
@@ -567,11 +590,12 @@ def make_drawer_map_html(center_lat: float = -23.0, center_lon: float = 30.0, zo
           window.__SENSOR_OPTIMIZER_MAP__ = map;
 
           var osm = window["{osm_js_name}"];
-          var sat = window["{sat_js_name}"];
-          if (osm && sat) {{
-            map.on("locationfound", function() {{
-              try {{ map.removeLayer(osm); }} catch(e) {{}}
-              try {{ map.addLayer(sat); }} catch(e) {{}}
+          var topo = window["{topo_js_name}"];
+          var light = window["{light_js_name}"];
+          if (osm && topo && light) {{
+            map.on("tileerror", function() {{
+              // If satellite tiles fail, keep standard basemaps available.
+              try {{ map.addLayer(osm); }} catch(e) {{}}
             }});
           }}
         }}
@@ -668,10 +692,32 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
     m = folium.Map(location=[center_lat, center_lon], zoom_start=16, tiles=None, control_scale=True)
 
     folium.TileLayer(
+        tiles="https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri, Maxar, Earthstar Geographics",
+        name="Satellite",
+        control=True,
+        show=True,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
+        attr="&copy; OpenStreetMap contributors &copy; CARTO",
+        name="Hybrid labels",
+        overlay=True,
+        control=False,
+        show=True,
+    ).add_to(m)
+    folium.TileLayer(
         "OpenStreetMap",
         name="OpenStreetMap",
         control=True,
-        show=True,
+        show=False,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        attr="Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap (CC-BY-SA)",
+        name="OpenTopoMap",
+        control=True,
+        show=False,
     ).add_to(m)
     folium.TileLayer(
         tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
