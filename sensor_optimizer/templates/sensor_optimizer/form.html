@@ -344,7 +344,8 @@ a.text-muted.small:hover { text-decoration: underline !important; }
 
           <!-- messages -->
           <div id="fb-alert" class="alert alert-success d-none">
-            Thanks! Your feedback was sent.
+            Thanks! Your feedback was sent. If your email app did not open, email
+            <a href="mailto:zolokiala@gmail.com">zolokiala@gmail.com</a>.
           </div>
           <div id="fb-error" class="alert alert-danger d-none"></div>
 
@@ -588,6 +589,7 @@ document.addEventListener("DOMContentLoaded", function () {
 <!-- Feedback modal AJAX -->
 <script>
 (function () {
+  const FEEDBACK_EMAIL = "zolokiala@gmail.com";
   const modalEl = document.getElementById("feedbackModal");
   const fbForm  = document.getElementById("feedback-form");
   if (!modalEl || !fbForm) return;
@@ -606,6 +608,24 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!errBox) return;
     errBox.textContent = msg || "Could not send feedback. Please try again.";
     errBox.classList.remove("d-none");
+  }
+
+  function openFeedbackEmailDraft(values) {
+    const subject = encodeURIComponent("Soil Moisture Sensor Optimization Feedback");
+    const body = encodeURIComponent(
+      [
+        "Feedback details:",
+        "",
+        `Name: ${values.name || "-"}`,
+        `Email: ${values.email || "-"}`,
+        `Rating: ${values.rating || "-"}`,
+        `Page: ${values.page || window.location.pathname}`,
+        "",
+        "Message:",
+        values.message || "-",
+      ].join("\n")
+    );
+    window.location.href = `mailto:${FEEDBACK_EMAIL}?subject=${subject}&body=${body}`;
   }
 
   modalEl.addEventListener("show.bs.modal", function () {
@@ -632,7 +652,15 @@ document.addEventListener("DOMContentLoaded", function () {
       const data = await resp.json().catch(() => ({}));
 
       if (resp.ok && data.ok) {
+        const values = {
+          name: (fbForm.querySelector('[name="name"]')?.value || "").trim(),
+          email: (fbForm.querySelector('[name="email"]')?.value || "").trim(),
+          rating: (fbForm.querySelector('[name="rating"]')?.value || "").trim(),
+          message: (fbForm.querySelector('[name="message"]')?.value || "").trim(),
+          page: (fbForm.querySelector('[name="page"]')?.value || "").trim(),
+        };
         if (okBox) okBox.classList.remove("d-none");
+        openFeedbackEmailDraft(values);
         fbForm.reset();
         if (pageInp) pageInp.value = window.location.pathname;
         return;
