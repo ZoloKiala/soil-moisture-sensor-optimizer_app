@@ -1,0 +1,15 @@
+VV
+VH
+VV_lin
+VH_lin
+angle
+angle_centered
+VV_VH_ratio
+VV_minus_VH
+VV_plus_VH
+RVI
+lin_sum
+lin_diff
+n_images
+elev
+s2_ndvi

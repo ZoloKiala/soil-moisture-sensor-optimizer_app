@@ -39,7 +39,7 @@
 
     <div class="layout-two">
       <!-- LEFT: Map -->
-      <div class="card">
+      <div class="card map-card">
         <div class="card-title">
           <span class="icon">🗺️</span>
           <span>Map</span>
@@ -55,7 +55,7 @@
       </div>
 
       <!-- RIGHT: Coordinates + report download -->
-      <div class="card">
+      <div class="card info-card">
         <div class="card-title">
           <span class="icon">📍</span>
           <span>Sensor coordinates</span>
@@ -88,11 +88,9 @@
         </div>
 
         <div class="btn-row" style="margin-top: 0.9rem;">
-          <form method="post" action="{% url 'sensor_optimizer:sensor_optimizer_map' %}">
+          <form method="get" action="{% url 'sensor_optimizer:download_layout_report' %}">
             {% csrf_token %}
-            <input type="hidden" name="date_target" value="{{ date_target }}">
-            <input type="hidden" name="cell_size_m" value="{{ cell_size_m }}">
-            <input type="hidden" name="geojson_tmp_path" value="{{ geojson_tmp_path }}">
+            <input type="hidden" name="run_id" value="{{ run_id }}">
             <button type="submit" class="btn btn-secondary">
               ⬇ Download layout report (PDF)
             </button>

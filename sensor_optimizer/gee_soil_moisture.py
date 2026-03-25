@@ -1,7 +1,7 @@
 # sensor_optimizer/gee_soil_moisture.py
 # ============================================================
-# Earth Engine + ExtraTrees: Soil Moisture on Grid Cells
-#   - Loads ExtraTrees model + features from HF Hub
+# Earth Engine + trained model: Soil Moisture on Grid Cells
+#   - Loads model + features (prefers local files; HF Hub fallback)
 #   - Builds regular grid over AOI GeoJSON
 #   - For each grid size:
 #       • Builds EE polygons
@@ -13,6 +13,7 @@
 
 import os
 import math
+import json
 from pathlib import Path
 from shapely import affinity
 
@@ -28,7 +29,7 @@ from shapely.geometry import box
 from huggingface_hub import hf_hub_download
 
 # ------------------------------------------------------------
-# Hugging Face model config
+# Model config
 # ------------------------------------------------------------
 
 HF_MODEL_REPO = os.environ.get(
@@ -38,35 +39,50 @@ HF_MODEL_REPO = os.environ.get(
 
 HF_MODEL_FILE = os.environ.get(
     "HF_MODEL_FILE",
-    "extratrees_s1_soil_moisture_points.pkl",
+    "soil_moisture_points_model.pkl",
 )
 
 HF_FEATURES_FILE = os.environ.get(
     "HF_FEATURES_FILE",
-    "extratrees_s1_soil_moisture_features.txt",
+    "soil_moisture_points_features.txt",
+)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LOCAL_MODEL_PATH = Path(
+    os.environ.get("SOIL_MOISTURE_MODEL_PATH", str(PROJECT_ROOT / "soil_moisture_points_model.pkl"))
+)
+LOCAL_FEATURES_PATH = Path(
+    os.environ.get("SOIL_MOISTURE_FEATURES_PATH", str(PROJECT_ROOT / "soil_moisture_points_features.txt"))
 )
 
 
 def load_model_and_features():
     """
-    Download the ExtraTrees model + feature list from HF Hub, then load them.
+    Load model + feature list.
+    Priority:
+      1) Local files in project root (or env override paths)
+      2) Hugging Face Hub files
     """
-    model_path = hf_hub_download(
-        repo_id=HF_MODEL_REPO,
-        filename=HF_MODEL_FILE,
-        repo_type="model",
-    )
-    features_path = hf_hub_download(
-        repo_id=HF_MODEL_REPO,
-        filename=HF_FEATURES_FILE,
-        repo_type="model",
-    )
+    model_path = LOCAL_MODEL_PATH
+    features_path = LOCAL_FEATURES_PATH
+
+    if not (model_path.exists() and features_path.exists()):
+        model_path = hf_hub_download(
+            repo_id=HF_MODEL_REPO,
+            filename=HF_MODEL_FILE,
+            repo_type="model",
+        )
+        features_path = hf_hub_download(
+            repo_id=HF_MODEL_REPO,
+            filename=HF_FEATURES_FILE,
+            repo_type="model",
+        )
 
     model = joblib.load(model_path)
     with open(features_path, "r") as f:
         feature_cols = [ln.strip() for ln in f.readlines() if ln.strip()]
 
-    print(f"[MODEL] Loaded model from {HF_MODEL_REPO}/{HF_MODEL_FILE}")
+    print(f"[MODEL] Loaded model from {model_path}")
     print(f"[MODEL] Loaded {len(feature_cols)} feature names.")
     return model, feature_cols
 
@@ -77,10 +93,20 @@ MODEL, FEATURE_COLS = load_model_and_features()
 # Earth Engine auth (service account via env vars)
 # ------------------------------------------------------------
 
-SA_EMAIL = os.environ.get("EE_SERVICE_ACCOUNT", "")
-PROJECT_ID = os.environ.get("EE_PROJECT_ID", "")
+SA_EMAIL = (
+    os.environ.get("EE_SERVICE_ACCOUNT", "")
+    or os.environ.get("EE_SERVICE_ACCOUNT_EMAIL", "")
+)
+PROJECT_ID = (
+    os.environ.get("EE_PROJECT_ID", "")
+    or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+)
 EE_KEY_JSON = os.environ.get("EE_SERVICE_ACCOUNT_KEY")          # full JSON string (optional)
-EE_KEY_FILE = os.environ.get("EE_SERVICE_ACCOUNT_KEY_FILE")     # file path (recommended)
+EE_KEY_FILE = (
+    os.environ.get("EE_SERVICE_ACCOUNT_KEY_FILE")                # preferred env name
+    or os.environ.get("EE_SERVICE_ACCOUNT_FILE")                 # backward-compatible alias
+    or str(PROJECT_ROOT / "tethys-app-1-acc3960d3dd6.json")      # local fallback
+)
 
 _EE_READY = False
 
@@ -89,27 +115,45 @@ def init_earth_engine():
     if _EE_READY:
         return
 
+    sa_email = SA_EMAIL
+    project_id = PROJECT_ID
+    key_meta = {}
+
     if EE_KEY_FILE and os.path.exists(EE_KEY_FILE):
         key_path = EE_KEY_FILE
+        try:
+            with open(key_path, "r", encoding="utf-8") as f:
+                key_meta = json.load(f)
+        except Exception:
+            key_meta = {}
     elif EE_KEY_JSON:
         key_path = "/tmp/ee-service-account.json"
         if not os.path.exists(key_path):
             with open(key_path, "w", encoding="utf-8") as f:
                 f.write(EE_KEY_JSON)
+        try:
+            key_meta = json.loads(EE_KEY_JSON)
+        except Exception:
+            key_meta = {}
     else:
         raise RuntimeError(
             "EE credentials missing.\n"
             "Set either EE_SERVICE_ACCOUNT_KEY (full JSON string) OR "
-            "EE_SERVICE_ACCOUNT_KEY_FILE (path to JSON)."
+            "EE_SERVICE_ACCOUNT_KEY_FILE / EE_SERVICE_ACCOUNT_FILE (path to JSON)."
         )
 
-    if not SA_EMAIL:
+    if not sa_email:
+        sa_email = key_meta.get("client_email", "")
+    if not project_id:
+        project_id = key_meta.get("project_id", "")
+
+    if not sa_email:
         raise RuntimeError("EE_SERVICE_ACCOUNT is not set.")
-    if not PROJECT_ID:
+    if not project_id:
         raise RuntimeError("EE_PROJECT_ID is not set.")
 
-    creds = ee.ServiceAccountCredentials(SA_EMAIL, key_path)
-    ee.Initialize(creds, project=PROJECT_ID)
+    creds = ee.ServiceAccountCredentials(sa_email, key_path)
+    ee.Initialize(creds, project=project_id)
     _EE_READY = True
 
 

@@ -200,13 +200,34 @@ select:focus {
 
 /* Draw map container */
 
-#draw-map,
-#map-preview {
+#draw-map {
   width: 100%;
   height: 260px;
   border-radius: 14px;
   overflow: hidden;
   border: 1px solid #d1d5db;
+}
+
+#map-preview {
+  width: 100%;
+  height: 680px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #d1d5db;
+}
+
+#map-preview iframe,
+#map-preview .folium-map {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.map-card {
+  flex: 1.45 1 0;
+}
+
+.info-card {
+  flex: 0.9 1 0;
 }
 
 /* ------------------------------
@@ -456,6 +477,15 @@ select:focus {
 @media (max-width: 900px) {
   .layout-two {
     flex-direction: column;
+  }
+
+  #map-preview {
+    height: 500px;
+  }
+
+  .map-card,
+  .info-card {
+    flex: 1 1 100%;
   }
 }
 

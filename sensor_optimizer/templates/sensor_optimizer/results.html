@@ -91,7 +91,7 @@
 
               <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
                 <a
-                  href="{% url 'sensor_optimizer:download_layout_report' %}"
+                  href="{% url 'sensor_optimizer:download_layout_report' %}?run_id={{ run_id }}"
                   class="btn btn-primary btn-sm d-inline-flex align-items-center gap-2"
                 >
                   ⬇ Download PDF report
@@ -122,6 +122,7 @@
               {{ aoi_geojson|json_script:"aoi_geojson" }}
               {{ grid_geojson_by_size|json_script:"grid_geojson_by_size" }}
               {{ centroids_geojson_by_size|json_script:"centroids_geojson_by_size" }}
+              {{ representative_sensor_by_size|json_script:"representative_sensor_by_size" }}
 
 
               <p class="text-muted mb-2">
@@ -195,6 +196,7 @@
             <div class="card-body">
               <form method="post" action="{% url 'sensor_optimizer:sensor_optimizer_map' %}">
                 {% csrf_token %}
+                <input type="hidden" name="run_id" value="{{ run_id }}">
 
                 <label for="id_cell_size_m" class="form-label small fw-semibold mb-1">
                   Grid cell size for map:
@@ -236,6 +238,7 @@
         const aoi = JSON.parse(document.getElementById("aoi_geojson").textContent || "{}");
         const grids = JSON.parse(document.getElementById("grid_geojson_by_size").textContent || "{}");
         const cents = JSON.parse(document.getElementById("centroids_geojson_by_size").textContent || "{}");
+        const reps = JSON.parse(document.getElementById("representative_sensor_by_size").textContent || "{}");
 
         const optimal = "{{ optimal_cell_size|default:'' }}";
         const hasOptimal = optimal !== "" && optimal !== "None";
@@ -247,12 +250,12 @@
           attribution: "&copy; OpenStreetMap contributors"
         }).addTo(map);
 
-        const esri = L.tileLayer(
-          "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-          { maxZoom: 19, attribution: "Esri, Maxar, Earthstar Geographics" }
+        const carto = L.tileLayer(
+          "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+          { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors &copy; CARTO" }
         );
 
-        const baseLayers = { "OpenStreetMap": osm, "Esri Imagery": esri };
+        const baseLayers = { "OpenStreetMap": osm, "Carto Light": carto };
 
         const aoiLayer = L.geoJSON(aoi, {
           style: { weight: 3, fillOpacity: 0.05 }
@@ -286,13 +289,43 @@
             }),
             onEachFeature: (feat, layer) => {
               const p = feat.properties || {};
+              const sid = (p.sensor_id !== undefined && p.sensor_id !== null) ? `Sensor ${p.sensor_id}` : "Sensor";
               const sm = (p.sm_pred !== undefined && p.sm_pred !== null) ? `SM: ${Number(p.sm_pred).toFixed(2)}%` : "SM: n/a";
-              layer.bindPopup(`<b>${cs} m</b><br>${sm}`);
+              layer.bindPopup(`<b>${cs} m</b><br>${sid}<br>${sm}`);
             }
           });
 
-          const group = L.layerGroup([gridLayer, centroidLayer]);
-          overlayLayers[`Grid ${cs} m (cells/lines + centroids)`] = group;
+          const rep = reps[cs];
+          let repLayer = L.layerGroup();
+          if (rep && Number.isFinite(Number(rep.lat)) && Number.isFinite(Number(rep.lon))) {
+            const smText = (rep.sm_pred !== undefined && rep.sm_pred !== null)
+              ? `${Number(rep.sm_pred).toFixed(2)}%`
+              : "n/a";
+            const distText = Number.isFinite(Number(rep.distance_to_cog_m))
+              ? `${Number(rep.distance_to_cog_m).toFixed(1)} m`
+              : "n/a";
+            const latText = Number(rep.lat).toFixed(6);
+            const lonText = Number(rep.lon).toFixed(6);
+            repLayer = L.layerGroup([
+              L.circleMarker([Number(rep.lat), Number(rep.lon)], {
+                radius: isOpt ? 10 : 8,
+                color: "#111827",
+                weight: 2,
+                fillColor: "#f59e0b",
+                fillOpacity: 1
+              }).bindPopup(
+                `<b>Representative sensor (${cs} m)</b><br>` +
+                `Sensor ${rep.sensor_id}<br>` +
+                `Coordinate: ${latText}, ${lonText}<br>` +
+                `SM: ${smText}<br>` +
+                `Distance to field COG: ${distText}<br>` +
+                `Use this sensor for irrigation trigger decisions.`
+              )
+            ]);
+          }
+
+          const group = L.layerGroup([gridLayer, centroidLayer, repLayer]);
+          overlayLayers[`Grid ${cs} m (cells/lines + centroids + representative sensor)`] = group;
 
           // show optimal by default (only)
           if (isOpt) group.addTo(map);
