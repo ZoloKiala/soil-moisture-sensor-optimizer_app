@@ -247,12 +247,20 @@ select:focus {
   max-width: 1400px;
 }
 
+.map-layout-page .layout-two {
+  align-items: stretch;
+}
+
 .map-layout-page .card {
+  display: flex;
+  flex-direction: column;
   min-height: 900px;
 }
 
 .map-layout-page #map-preview {
-  height: 920px;
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 920px;
 }
 
 .map-layout-page .map-card {
@@ -519,6 +527,7 @@ select:focus {
 
   .map-layout-page #map-preview {
     height: 680px;
+    min-height: 680px;
   }
 
   .map-card,
