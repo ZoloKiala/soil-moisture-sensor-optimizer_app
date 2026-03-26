@@ -165,6 +165,8 @@ MAX_DAYS_DIFF = 6          # days for closest S1 composite (±)
 STEP_DAYS = 6              # composite window
 AOI_BUFFER_M = 15000       # buffer for S1 search (m)
 SCALE = 20                 # sampling scale (m)
+CV_MIN_PCT = 0.01          # keep CV strictly positive for reporting/selection
+S2_NDVI_FALLBACK = float(os.environ.get("S2_NDVI_FALLBACK", "0.35"))
 
 S1_ORBIT_PASS = None       # or "ASCENDING"/"DESCENDING"
 
@@ -664,11 +666,37 @@ def predict_sm_on_grid(
     for col in ["VV", "VH", "angle"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df["VV_VH_ratio"] = df["VV"] / df["VH"]
-    df["VV_minus_VH"] = df["VV"] - df["VH"]
-    df["VV_plus_VH"] = df["VV"] + df["VH"]
-    df["VV_dB"] = 10.0 * np.log10(df["VV"] + 1e-6)
-    df["VH_dB"] = 10.0 * np.log10(df["VH"] + 1e-6)
+    vv_raw = df["VV"]
+    vh_raw = df["VH"]
+    vv_med = float(vv_raw.median(skipna=True)) if vv_raw.notna().any() else np.nan
+    vh_med = float(vh_raw.median(skipna=True)) if vh_raw.notna().any() else np.nan
+    input_is_db = (np.isfinite(vv_med) and vv_med < 0.0) or (np.isfinite(vh_med) and vh_med < 0.0)
+
+    if input_is_db:
+        vv_lin = np.power(10.0, vv_raw / 10.0)
+        vh_lin = np.power(10.0, vh_raw / 10.0)
+        df["VV_dB"] = vv_raw
+        df["VH_dB"] = vh_raw
+    else:
+        vv_lin = vv_raw.clip(lower=0.0)
+        vh_lin = vh_raw.clip(lower=0.0)
+        df["VV_dB"] = 10.0 * np.log10(vv_lin + 1e-6)
+        df["VH_dB"] = 10.0 * np.log10(vh_lin + 1e-6)
+
+    # Engineered predictors expected by the trained model.
+    df["VV_lin"] = vv_lin
+    df["VH_lin"] = vh_lin
+    df["lin_sum"] = vv_lin + vh_lin
+    df["lin_diff"] = vv_lin - vh_lin
+    df["VV_VH_ratio"] = vv_lin / (vh_lin + 1e-6)
+    df["VV_minus_VH"] = vv_raw - vh_raw
+    df["VV_plus_VH"] = vv_raw + vh_raw
+    df["RVI"] = 4.0 * vh_lin / (vv_lin + vh_lin + 1e-6)
+
+    angle_med = float(df["angle"].median(skipna=True)) if df["angle"].notna().any() else 0.0
+    df["angle_centered"] = df["angle"] - angle_med
+    if "s2_ndvi" not in df.columns:
+        df["s2_ndvi"] = S2_NDVI_FALLBACK
 
     if "time_diff_ms" in df.columns:
         df["time_diff_days"] = pd.to_numeric(
@@ -701,6 +729,12 @@ def predict_sm_on_grid(
     mean_sm = df["sm_pred"].mean()
     std_sm = df["sm_pred"].std(ddof=1)
     cv_pct = (std_sm / mean_sm) * 100 if mean_sm != 0 else np.nan
+    try:
+        cv_pct = float(cv_pct)
+    except Exception:
+        cv_pct = np.nan
+    if not np.isfinite(cv_pct) or cv_pct <= 0:
+        cv_pct = float(CV_MIN_PCT)
 
     print(f"[INFER] date={date_target}, cell={cell_size_m} m")
     print(f"[INFER] mean={mean_sm:.2f}, std={std_sm:.2f}, CV={cv_pct:.2f} %")

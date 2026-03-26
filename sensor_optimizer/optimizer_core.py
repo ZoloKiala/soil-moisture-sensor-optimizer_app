@@ -8,6 +8,7 @@ from .gee_soil_moisture import predict_sm_on_grid
 
 
 CV_TOLERANCE = float(2.0)  # percentage points
+MIN_SENSORS = 2
 
 
 import pandas as pd
@@ -27,6 +28,9 @@ def choose_best_row(summary_df: pd.DataFrame, cv_good_threshold: float = 10.0, t
 
     df = df.dropna(subset=["cv_percent", "n_sensors", "cell_size_m"])
     df["n_sensors"] = df["n_sensors"].astype(int)
+    df = df[df["n_sensors"] >= int(MIN_SENSORS)].copy()
+    if df.empty:
+        raise ValueError(f"No valid rows with n_sensors >= {MIN_SENSORS}.")
 
     # 1) If any CV < 10%: minimize sensors, then CV
     good = df[df["cv_percent"] < float(cv_good_threshold)]
@@ -131,10 +135,23 @@ def run_sensor_optimization(date_target: str, geojson_path: str, cell_sizes):
             # assume already list-of-dicts or similar
             df_store = df_coords
 
+        sensor_count = int(len(df_store))
+        if sensor_count < int(MIN_SENSORS):
+            print(
+                f"[OPT] Skipping cell_size={int(cell_size)} m: "
+                f"n_sensors={sensor_count} < MIN_SENSORS={MIN_SENSORS}."
+            )
+            continue
+
         cvs.append(float(cv_pct))
-        n_sensors.append(int(len(df_store)))
+        n_sensors.append(sensor_count)
         used_cell_sizes.append(int(cell_size))
         centroid_data[str(int(cell_size))] = df_store
+
+    if not used_cell_sizes:
+        raise RuntimeError(
+            f"No valid grid configuration produced at least {MIN_SENSORS} sensors."
+        )
 
     summary_df = (
         pd.DataFrame(

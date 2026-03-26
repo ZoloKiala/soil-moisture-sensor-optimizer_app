@@ -254,13 +254,13 @@ select:focus {
 .map-layout-page .card {
   display: flex;
   flex-direction: column;
-  min-height: 900px;
+  min-height: 870px;
 }
 
 .map-layout-page #map-preview {
   flex: 1 1 auto;
   height: auto;
-  min-height: 920px;
+  min-height: 870px;
 }
 
 .map-layout-page .map-card {
