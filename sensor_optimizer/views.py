@@ -13,6 +13,8 @@ from typing import Optional
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from django.conf import settings
+from django.core.mail import send_mail
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import render, redirect
 from django.utils.safestring import mark_safe
@@ -914,9 +916,9 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
     <style>
       #smso-features-legend {
         position: absolute;
-        bottom: 22px;
+        top: 108px;
         left: 12px;
-        z-index: 10002;
+        z-index: 10010;
         background: rgba(255,255,255,0.96);
         color: #111827;
         border: 1px solid rgba(0,0,0,0.25);
@@ -926,7 +928,7 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
         line-height: 1.35;
         box-shadow: 0 8px 22px rgba(0,0,0,0.24);
         max-width: min(360px, calc(100% - 24px));
-        pointer-events: none;
+        pointer-events: auto;
       }
       #smso-features-legend .title {
         font-weight: 700;
@@ -1243,17 +1245,19 @@ def sensor_optimizer_view(request):
 
 def centroid_map_view(request):
     """
-    POST:
+    GET or POST:
       - if download_report=1 -> return PDF
       - else uses cell_size_m -> show styled map preview
     """
-    if request.method != "POST":
+    if request.method not in ("GET", "POST"):
         return redirect("sensor_optimizer:sensor_optimizer")
 
-    if request.POST.get("download_report") == "1":
+    params = request.POST if request.method == "POST" else request.GET
+
+    if params.get("download_report") == "1":
         return download_layout_report_view(request)
 
-    cell_size = safe_int(request.POST.get("cell_size_m"))
+    cell_size = safe_int(params.get("cell_size_m"))
     if cell_size is None:
         return HttpResponseBadRequest("Missing/invalid cell_size_m")
 
@@ -1280,12 +1284,12 @@ def centroid_map_view(request):
         request,
         "sensor_optimizer/map.html",
         {
-            "date_target": date_target,
-            "cell_size": int(cell_size),
-            "map_html": map_html,
-            "coords": df_coords.to_dict(orient="records"),
-            "run_id": request.POST.get("run_id") or request.session.get("last_run_id") or "",
-        },
+                "date_target": date_target,
+                "cell_size": int(cell_size),
+                "map_html": map_html,
+                "coords": df_coords.to_dict(orient="records"),
+                "run_id": params.get("run_id") or request.session.get("last_run_id") or "",
+            },
     )
 
 
@@ -1435,6 +1439,31 @@ def feedback_ajax_view(request):
         fb.page = (request.POST.get("page") or "")[:200]
         fb.user_agent = (request.META.get("HTTP_USER_AGENT") or "")[:300]
         fb.save()
-        return JsonResponse({"ok": True})
+        mailed = False
+
+        to_email = (getattr(settings, "FEEDBACK_NOTIFY_EMAIL", "") or "").strip()
+        if to_email:
+            subject = f"New Feedback ({fb.rating}/5)"
+            body = (
+                f"Name: {fb.name or '-'}\n"
+                f"Email: {fb.email or '-'}\n"
+                f"Rating: {fb.rating}\n"
+                f"Page: {fb.page or '-'}\n"
+                f"Submitted: {fb.created_at}\n\n"
+                f"Message:\n{fb.message or '-'}\n"
+            )
+            try:
+                send_mail(
+                    subject=subject,
+                    message=body,
+                    from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+                    recipient_list=[to_email],
+                    fail_silently=False,
+                )
+                mailed = True
+            except Exception:
+                mailed = False
+
+        return JsonResponse({"ok": True, "mailed": mailed})
 
     return JsonResponse({"ok": False, "errors": form.errors}, status=400)

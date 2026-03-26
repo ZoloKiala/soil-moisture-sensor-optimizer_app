@@ -194,8 +194,7 @@
               </div>
             </div>
             <div class="card-body">
-              <form method="post" action="{% url 'sensor_optimizer:sensor_optimizer_map' %}">
-                {% csrf_token %}
+              <form method="get" action="{% url 'sensor_optimizer:sensor_optimizer_map' %}">
                 <input type="hidden" name="run_id" value="{{ run_id }}">
 
                 <label for="id_cell_size_m" class="form-label small fw-semibold mb-1">

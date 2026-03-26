@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="{% static 'sensor_optimizer/apple-touch-icon.png' %}">
   <link rel="stylesheet" href="{% static 'sensor_optimizer/style.css' %}">
 </head>
-<body>
+<body class="map-layout-page">
   <div class="page">
 
 <header>
@@ -25,7 +25,7 @@
 
   <p class="subtitle">
     Date: <b>{{ date_target }}</b> ·
-    Cell size: <b>{{ cell_size_m }} m</b> ·
+    Cell size: <b>{{ cell_size }} m</b> ·
     CV ≈ <b>{{ cv_percent|floatformat:2 }} %</b>
   </p>
 

@@ -437,6 +437,7 @@ def build_plot_grid_centroids(
 
     # ---- Option 1 inclusion rule (centroid-in + overlap)
     cell_area = float(cell_size_m) * float(cell_size_m)
+    clipped_centroid_min_frac = 0.40
 
     # First cheap filter: intersects AOI
     grid = grid[grid.intersects(aoi_union)].copy()
@@ -467,6 +468,19 @@ def build_plot_grid_centroids(
     # Use clipped geometry for EE sampling (keeps sampling within AOI)
     grid_keep["geometry"] = grid_keep.geometry.intersection(aoi_union)
 
+    # Boundary-crossing cells can use clipped-polygon centroid if clipped area is
+    # at least 40% of the full cell area; otherwise keep full-cell centroid.
+    grid_keep["clipped_centroid"] = grid_keep.geometry.centroid
+    grid_keep["is_boundary_cell"] = grid_keep["overlap_frac"] < (1.0 - 1e-9)
+    use_clipped_centroid = (
+        grid_keep["is_boundary_cell"]
+        & (grid_keep["overlap_frac"] >= clipped_centroid_min_frac)
+    )
+    grid_keep["centroid_selected"] = grid_keep["centroid"]
+    grid_keep.loc[use_clipped_centroid, "centroid_selected"] = grid_keep.loc[
+        use_clipped_centroid, "clipped_centroid"
+    ]
+
     # Convert kept cells + centroids to EPSG:4326
     grid_keep_4326 = grid_keep.to_crs(epsg=4326)
 
@@ -480,9 +494,10 @@ def build_plot_grid_centroids(
         if poly is None or poly.is_empty:
             continue
 
-        # IMPORTANT: centroid from the *full cell*, not clipped piece
-        # (we stored centroid in UTM; convert it to 4326)
-        c_utm = row["centroid"]
+        # Use centroid selected by overlap rule:
+        # - boundary-crossing cells with overlap >= 40% => clipped centroid
+        # - all other cells => full-cell centroid
+        c_utm = row["centroid_selected"]
         c_wgs = gpd.GeoSeries([c_utm], crs=utm_crs).to_crs(epsg=4326).iloc[0]
 
         lon = float(c_wgs.x)
@@ -497,6 +512,7 @@ def build_plot_grid_centroids(
                 "date": date_str,
                 "Sheet": "plot_grid",
                 "overlap_frac": float(row.get("overlap_frac", 0.0)),
+                "is_boundary_cell": bool(row.get("is_boundary_cell", False)),
             },
         )
         features.append(feat)
@@ -573,22 +589,43 @@ def predict_sm_on_grid(
     # Sentinel-1 collection
     s1 = get_s1_collection(aoi, S1_ORBIT_PASS)
 
-    start_wide = (
-        ee.Date(date_target)
-        .advance(-MAX_DAYS_DIFF, "day")
-        .format("YYYY-MM-dd")
-        .getInfo()
-    )
-    end_wide = ee.Date(date_target).format("YYYY-MM-dd").getInfo()
-    print(f"[INFER] S1 wide date range: {start_wide} → {end_wide}")
+    # Progressive fallback windows (days around target date) to reduce hard failures
+    # in areas/dates with sparse Sentinel-1 coverage.
+    extra_windows = os.environ.get("S1_FALLBACK_WINDOWS_DAYS", "12,18,24")
+    fallback_windows = []
+    for tok in extra_windows.split(","):
+        tok = tok.strip()
+        if tok:
+            try:
+                fallback_windows.append(int(tok))
+            except Exception:
+                pass
+    window_days_candidates = [int(MAX_DAYS_DIFF)] + fallback_windows
+    window_days_candidates = sorted({d for d in window_days_candidates if d > 0})
 
-    s1_period = s1.filterDate(start_wide, end_wide)
-    n_s1 = s1_period.size().getInfo()
-    print("[INFER] S1 images in wide range:", n_s1)
-    if n_s1 == 0:
+    s1_period = None
+    n_s1 = 0
+    selected_days = int(MAX_DAYS_DIFF)
+    start_wide = None
+    end_wide = None
+    for days in window_days_candidates:
+        start_wide = ee.Date(date_target).advance(-days, "day").format("YYYY-MM-dd").getInfo()
+        end_wide = ee.Date(date_target).advance(days, "day").format("YYYY-MM-dd").getInfo()
+        print(f"[INFER] S1 wide date range (±{days}d): {start_wide} → {end_wide}")
+        s1_try = s1.filterDate(start_wide, end_wide)
+        n_try = s1_try.size().getInfo()
+        print(f"[INFER] S1 images in range (±{days}d): {n_try}")
+        if n_try > 0:
+            s1_period = s1_try
+            n_s1 = n_try
+            selected_days = days
+            break
+
+    if s1_period is None or n_s1 == 0:
+        tried_txt = ", ".join([f"±{d}d" for d in window_days_candidates])
         raise RuntimeError(
-            f"No S1 images in period for cell_size_m={cell_size_m}. "
-            "Try another date or expand range."
+            f"No S1 images found for cell_size_m={cell_size_m} after trying windows: {tried_txt}. "
+            "Try another date or larger AOI."
         )
 
     # Make step-day composites
@@ -604,7 +641,7 @@ def predict_sm_on_grid(
     fc_cells_s1 = attach_s1_nearest_composite_closest_mean_over_cell(
         fc_cells,
         comps,
-        MAX_DAYS_DIFF,
+        selected_days,
         dem_elev=dem_elev,
         dem_slope=dem_slope,
     )
