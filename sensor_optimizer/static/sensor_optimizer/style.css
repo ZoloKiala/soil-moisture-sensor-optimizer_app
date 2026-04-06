@@ -244,7 +244,7 @@ select:focus {
 
 /* map preview page sizing */
 .map-layout-page .page {
-  max-width: 1480px;
+  max-width: 1360px;
 }
 
 .map-layout-page .layout-two {
@@ -254,22 +254,22 @@ select:focus {
 .map-layout-page .card {
   display: flex;
   flex-direction: column;
-  min-height: 820px;
+  min-height: 740px;
 }
 
 .map-layout-page #map-preview {
   flex: 1 1 auto;
   height: auto;
-  min-height: 820px;
+  min-height: 740px;
 }
 
 .map-layout-page .map-card {
-  flex: 1.8 1 0;
-  min-height: 820px;
+  flex: 1.55 1 0;
+  min-height: 740px;
 }
 
 .map-layout-page .info-card {
-  flex: 0.8 1 0;
+  flex: 0.9 1 0;
 }
 
 /* ------------------------------
