@@ -986,6 +986,48 @@ def _build_sm_map(
         font-size: 14px;
         line-height: 1.45;
       }}
+      @media (max-width: 900px) {{
+        #smso-legend {{
+          top: auto;
+          bottom: 16px;
+          right: 12px;
+          transform: none;
+          width: 96px;
+          padding: 10px 10px;
+        }}
+        #smso-legend .bar {{
+          height: 180px;
+          width: 16px;
+        }}
+        #smso-legend .ticks {{
+          font-size: 11px;
+        }}
+        #smso-legend .label {{
+          font-size: 12px;
+        }}
+      }}
+      @media (max-width: 640px) {{
+        #smso-legend {{
+          bottom: 12px;
+          right: 10px;
+          width: 88px;
+          padding: 8px 8px;
+        }}
+        #smso-legend .bar {{
+          height: 140px;
+          width: 14px;
+        }}
+        #smso-legend .ticks {{
+          font-size: 10px;
+        }}
+        #smso-features-legend {{
+          left: 10px;
+          bottom: 10px;
+          padding: 10px 12px;
+          font-size: 12px;
+          max-width: min(240px, calc(100% - 120px));
+        }}
+      }}
     </style>
     <div id="smso-legend">
       <div class="legend-wrap">
