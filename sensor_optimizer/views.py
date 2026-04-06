@@ -936,7 +936,7 @@ def _build_sm_map(
     <style>
       #smso-legend {{
         position:absolute;
-        bottom:16px;
+        top:16px;
         right:16px;
         z-index:10001;
         background:rgba(255,255,255,0.97);
@@ -944,7 +944,7 @@ def _build_sm_map(
         border-radius: 14px;
         border: 1px solid rgba(0,0,0,0.2);
         box-shadow: 0 8px 24px rgba(0,0,0,0.28);
-        width: min(680px, calc(100% - 32px));
+        width: min(520px, calc(100% - 32px));
         pointer-events:auto;
       }}
       #smso-legend .ticks {{
@@ -1003,7 +1003,7 @@ def _build_sm_map(
         font-size:14px;
         line-height:1.45;
         box-shadow:0 8px 22px rgba(0,0,0,0.24);
-        max-width:min(460px, calc(100% - 32px));
+        max-width:min(360px, calc(100% - 32px));
         pointer-events:auto;
       "
     >
