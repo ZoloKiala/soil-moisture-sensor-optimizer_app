@@ -227,8 +227,12 @@ a.text-muted.small:hover { text-decoration: underline !important; }
 
           <p class="text-center text-muted mb-4 header-subtitle"
              style="font-size:1.45rem!important">
-            Sentinel-1 + ExtraTrees — determine optimal sensor grid size that minimizes soil moisture variability.
+            Sentinel-1 + ExtraTrees — compare candidate grid sizes and select the most efficient sensor layout.
           </p>
+
+          <div class="alert alert-light border small mb-4">
+            <strong>Methodology.</strong> The app first estimates soil moisture on a 10 m surface across the uploaded field polygon. It then evaluates candidate sensor grids inside that polygon by aggregating each candidate grid cell as a polygon-based soil-moisture unit, computes the coefficient of variation (CV) across those grid-cell values, and selects the fewest sensors with CV below 10% and at least 2 sensors; if none meet that threshold, it falls back to the minimum-CV layout.
+          </div>
 
           {% if error %}
             <div class="alert alert-danger py-2">{{ error }}</div>

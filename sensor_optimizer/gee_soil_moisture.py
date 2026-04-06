@@ -110,6 +110,25 @@ EE_KEY_FILE = (
 
 _EE_READY = False
 
+
+def _candidate_key_paths() -> list[str]:
+    candidates = [EE_KEY_FILE]
+    for base in (PROJECT_ROOT, PROJECT_ROOT.parent):
+        for name in (
+            "tethys-app-1-acc3960d3dd6.json",
+            "tethys-app-1-e966a52925fc.json",
+        ):
+            candidates.append(str(base / name))
+
+    seen = set()
+    ordered = []
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+    return ordered
+
 def init_earth_engine():
     global _EE_READY
     if _EE_READY:
@@ -119,13 +138,19 @@ def init_earth_engine():
     project_id = PROJECT_ID
     key_meta = {}
 
-    if EE_KEY_FILE and os.path.exists(EE_KEY_FILE):
-        key_path = EE_KEY_FILE
-        try:
-            with open(key_path, "r", encoding="utf-8") as f:
-                key_meta = json.load(f)
-        except Exception:
-            key_meta = {}
+    key_path = ""
+    for candidate in _candidate_key_paths():
+        if os.path.exists(candidate):
+            key_path = candidate
+            try:
+                with open(key_path, "r", encoding="utf-8") as f:
+                    key_meta = json.load(f)
+            except Exception:
+                key_meta = {}
+            break
+
+    if key_path:
+        pass
     elif EE_KEY_JSON:
         key_path = "/tmp/ee-service-account.json"
         if not os.path.exists(key_path):

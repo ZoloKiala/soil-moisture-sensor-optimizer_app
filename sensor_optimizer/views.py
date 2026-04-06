@@ -36,6 +36,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 from .optimizer_core import run_sensor_optimization  # (summary_df, best_row, centroid_data)
+from .gee_soil_moisture import predict_sm_on_grid
 
 
 import base64
@@ -60,6 +61,29 @@ from .forms import FeedbackForm
 
 
 RUNS_DIR = Path(tempfile.gettempdir()) / "smso_runs"
+CV_THRESHOLD_PERCENT = 10.0
+
+
+def theoretical_sensors_per_ha(cell_size_m: int | float | None) -> float | None:
+    try:
+        cell_size = float(cell_size_m)
+    except Exception:
+        return None
+    if cell_size <= 0:
+        return None
+    return 10000.0 / (cell_size * cell_size)
+
+
+def selection_rule_label(best_row: dict | None) -> str:
+    if not isinstance(best_row, dict):
+        return ""
+    try:
+        cvp = float(best_row.get("cv_percent"))
+    except Exception:
+        return ""
+    if cvp < CV_THRESHOLD_PERCENT:
+        return "fewest sensors with CV below 10% and at least 2 sensors"
+    return "minimum CV fallback with at least 2 sensors"
 
 def _cleanup_old_runs(max_age_seconds=6 * 3600):
     """Delete old runs from /tmp to avoid unlimited growth."""
@@ -117,8 +141,13 @@ def _load_run_payload(run_id: str) -> dict:
 
 def results_view(request, run_id: str):
     ctx = _load_run_payload(run_id)
+    best_row = ctx.get("best_row") or {}
+    if "selection_rule_used" not in ctx:
+        ctx["selection_rule_used"] = selection_rule_label(best_row)
     # Hydrate session so POST-only endpoints (map/report) work after refresh/share.
     request.session["last_run_id"] = run_id
+    request.session["preview_10m_run_id"] = None
+    request.session["preview_10m_centroid_data"] = None
     for k in (
         "date_target",
         "summary_rows",
@@ -183,6 +212,14 @@ def _save_geojson_text(geojson_text: str) -> str:
     os.close(fd)
     with open(path, "w", encoding="utf-8") as f:
         f.write(geojson_text)
+    return path
+
+
+def _save_geojson_dict(geojson_obj: dict) -> str:
+    fd, path = tempfile.mkstemp(prefix="aoi_saved_", suffix=".geojson")
+    os.close(fd)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(geojson_obj, f)
     return path
 
 
@@ -327,67 +364,58 @@ def centroids_geojson_by_size(centroid_data: dict) -> dict:
 
 def representative_sensor_by_size(centroid_data: dict, aoi_geojson: dict | None) -> dict:
     """
-    Select one representative sensor per cell size:
-    nearest centroid to AOI center of gravity.
+    Compute the center of gravity of the sensor set itself for each cell size.
     """
-    if not aoi_geojson:
-        return {}
-
-    geom_ll = None
-    try:
-        if aoi_geojson.get("type") == "FeatureCollection":
-            for ft in aoi_geojson.get("features", []):
-                g = (ft or {}).get("geometry")
-                if g and g.get("type") in ("Polygon", "MultiPolygon"):
-                    geom_ll = shape(g)
-                    break
-        elif aoi_geojson.get("type") == "Feature":
-            g = aoi_geojson.get("geometry")
-            if g and g.get("type") in ("Polygon", "MultiPolygon"):
-                geom_ll = shape(g)
-        elif aoi_geojson.get("type") in ("Polygon", "MultiPolygon"):
-            geom_ll = shape(aoi_geojson)
-    except Exception:
-        return {}
-
-    if geom_ll is None:
-        return {}
-
-    cog_ll = geom_ll.centroid
-    cog_lon = float(cog_ll.x)
-    cog_lat = float(cog_ll.y)
-
-    epsg = _utm_epsg_from_lonlat(cog_lon, cog_lat)
-    to_m = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
-    cog_x, cog_y = to_m.transform(cog_lon, cog_lat)
-
     out = {}
     for cs, rows in (centroid_data or {}).items():
-        best = None
-        best_d2 = None
+        valid_rows = []
         for i, r in enumerate(rows or [], start=1):
             try:
                 lon = float(r.get("lon"))
                 lat = float(r.get("lat"))
             except Exception:
                 continue
+            valid_rows.append((i, r, lon, lat))
 
+        if not valid_rows:
+            continue
+
+        avg_lon = sum(item[2] for item in valid_rows) / len(valid_rows)
+        avg_lat = sum(item[3] for item in valid_rows) / len(valid_rows)
+        epsg = _utm_epsg_from_lonlat(avg_lon, avg_lat)
+        to_m = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+
+        xy_rows = []
+        for i, r, lon, lat in valid_rows:
             x, y = to_m.transform(lon, lat)
-            d2 = (x - cog_x) ** 2 + (y - cog_y) ** 2
-            if best_d2 is None or d2 < best_d2:
-                best_d2 = d2
-                best = {
-                    "cell_size_m": safe_int(cs),
-                    "sensor_id": safe_int(r.get("sensor_id"), default=i),
-                    "lon": lon,
-                    "lat": lat,
-                    "sm_pred": r.get("sm_pred"),
-                    "distance_to_cog_m": float(d2 ** 0.5),
-                    "method": "nearest_to_aoi_center_of_gravity",
-                }
+            xy_rows.append((i, r, lon, lat, x, y))
 
-        if best:
-            out[str(cs)] = best
+        cog_x = sum(item[4] for item in xy_rows) / len(xy_rows)
+        cog_y = sum(item[5] for item in xy_rows) / len(xy_rows)
+        to_ll = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+        cog_lon, cog_lat = to_ll.transform(cog_x, cog_y)
+
+        nearest_sensor_id = None
+        nearest_sensor_sm = None
+        nearest_d2 = None
+        for i, r, lon, lat, x, y in xy_rows:
+            d2 = (x - cog_x) ** 2 + (y - cog_y) ** 2
+            if nearest_d2 is None or d2 < nearest_d2:
+                nearest_d2 = d2
+                nearest_sensor_id = safe_int(r.get("sensor_id"), default=i)
+                nearest_sensor_sm = r.get("sm_pred")
+
+        out[str(cs)] = {
+            "cell_size_m": safe_int(cs),
+            "lon": cog_lon,
+            "lat": cog_lat,
+            "cog_lon": cog_lon,
+            "cog_lat": cog_lat,
+            "nearest_sensor_id": nearest_sensor_id,
+            "nearest_sensor_sm": nearest_sensor_sm,
+            "distance_to_nearest_sensor_m": float(nearest_d2 ** 0.5) if nearest_d2 is not None else None,
+            "method": "sensor_set_center_of_gravity",
+        }
 
     return out
 
@@ -644,6 +672,7 @@ def build_cv_plot(summary_df: pd.DataFrame, best_row: dict | None):
     ax.set_xlabel("Number of sensors")
     ax.set_ylabel("CV (%)")
     ax.grid(True, alpha=0.25)
+    ax.axhline(CV_THRESHOLD_PERCENT, color="#f39c12", linestyle="--", linewidth=1.2)
 
     for _, r in df.iterrows():
         cs = r.get("cell_size_m")
@@ -674,9 +703,8 @@ def build_cv_plot(summary_df: pd.DataFrame, best_row: dict | None):
 # FIXED Soil-moisture preview map (grid cells + red dots + compact legend + fit bounds)
 # -----------------------------------------------------------------------------
 
-def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict | None = None):
+def _prepare_map_df(df_coords: pd.DataFrame) -> pd.DataFrame:
     df = df_coords.copy()
-
     if not {"lon", "lat", "sm_pred"}.issubset(df.columns):
         raise ValueError("df_coords must contain lon, lat, sm_pred columns.")
 
@@ -684,12 +712,23 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
     df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
     df["sm_pred"] = pd.to_numeric(df["sm_pred"], errors="coerce")
     df = df.dropna(subset=["lon", "lat", "sm_pred"]).copy()
-
     if df.empty:
-        raise ValueError("No valid centroid rows after cleaning (lon/lat/sm_pred).")
+        raise ValueError("No valid rows after cleaning (lon/lat/sm_pred).")
+    return df
 
-    center_lat = float(df["lat"].mean())
-    center_lon = float(df["lon"].mean())
+
+def _build_sm_map(
+    surface_coords: pd.DataFrame,
+    surface_cell_size_m: int,
+    sensor_coords: pd.DataFrame | None = None,
+    sensor_cell_size_m: int | None = None,
+    aoi_geojson: dict | None = None,
+):
+    surface_df = _prepare_map_df(surface_coords)
+    sensor_df = _prepare_map_df(sensor_coords) if sensor_coords is not None else surface_df.copy()
+
+    center_lat = float(surface_df["lat"].mean())
+    center_lon = float(surface_df["lon"].mean())
 
     m = folium.Map(location=[center_lat, center_lon], zoom_start=16, tiles=None, control_scale=True)
 
@@ -698,7 +737,7 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
         attr="Esri, Maxar, Earthstar Geographics",
         name="Satellite",
         control=True,
-        show=True,
+        show=False,
     ).add_to(m)
     folium.TileLayer(
         tiles="https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
@@ -726,11 +765,11 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
         attr="&copy; OpenStreetMap contributors &copy; CARTO",
         name="Carto Light",
         control=True,
-        show=False,
+        show=True,
     ).add_to(m)
 
-    sm_min = float(df["sm_pred"].min())
-    sm_max = float(df["sm_pred"].max())
+    sm_min = float(surface_df["sm_pred"].min())
+    sm_max = float(surface_df["sm_pred"].max())
     if sm_min == sm_max:
         sm_min -= 0.1
         sm_max += 0.1
@@ -746,12 +785,12 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
     to_m = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
     to_ll = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
 
-    half = float(cell_size_m) / 2.0
+    half = float(surface_cell_size_m) / 2.0
 
     xs, ys = [], []
     cell_features = []
 
-    for _, r in df.iterrows():
+    for _, r in surface_df.iterrows():
         lon = float(r["lon"])
         lat = float(r["lat"])
         sm = float(r["sm_pred"])
@@ -779,23 +818,32 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
 
     cells_fc = {"type": "FeatureCollection", "features": cell_features}
 
-    grid_group = folium.FeatureGroup(name="Soil moisture (grid cells)", show=True)
+    surface_label = f"Soil moisture map ({int(surface_cell_size_m)} m)"
+    grid_group = folium.FeatureGroup(name=surface_label, show=True)
     folium.GeoJson(
         cells_fc,
         style_function=lambda feat: {
+            "fill": True,
             "fillColor": colormap(float(feat["properties"]["sm_pred"])),
-            "color": "#0f172a",
-            "weight": 1.4,
-            "fillOpacity": 0.72,
+            "color": "#475569",
+            "weight": 0.15,
+            "opacity": 0.18,
+            "fillOpacity": 0.96,
         },
         tooltip=folium.GeoJsonTooltip(fields=["sm_pred"], aliases=["Predicted SM (%)"], localize=True),
     ).add_to(grid_group)
     grid_group.add_to(m)
 
-    sensors_group = folium.FeatureGroup(name="Soil moisture sensors (centroids)", show=True)
-    for _, r in df.iterrows():
+    sensor_label = "Optimal soil moisture sensors"
+    if sensor_cell_size_m:
+        sensor_label = f"Optimal soil moisture sensors ({int(sensor_cell_size_m)} m layout)"
+    sensors_group = folium.FeatureGroup(name=sensor_label, show=True)
+    grid_group = folium.FeatureGroup(name="Optimal sensor grid", show=False)
+    for _, r in sensor_df.iterrows():
+        lon = float(r["lon"])
+        lat = float(r["lat"])
         folium.CircleMarker(
-            location=[float(r["lat"]), float(r["lon"])],
+            location=[lat, lon],
             radius=6,
             color="#ef4444",
             fill=True,
@@ -803,6 +851,25 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
             fill_opacity=0.95,
             weight=1,
         ).add_to(sensors_group)
+        if sensor_cell_size_m:
+            x, y = to_m.transform(lon, lat)
+            grid_half = float(sensor_cell_size_m) / 2.0
+            ring_m = [
+                (x - grid_half, y - grid_half),
+                (x + grid_half, y - grid_half),
+                (x + grid_half, y + grid_half),
+                (x - grid_half, y + grid_half),
+                (x - grid_half, y - grid_half),
+            ]
+            ring_ll = [to_ll.transform(xx, yy) for (xx, yy) in ring_m]
+            folium.Polygon(
+                locations=[[pt[1], pt[0]] for pt in ring_ll],
+                color="#38bdf8",
+                weight=2,
+                fill=False,
+                opacity=0.95,
+            ).add_to(grid_group)
+    grid_group.add_to(m)
     sensors_group.add_to(m)
 
     # AOI outline + bounds to full extent
@@ -812,7 +879,7 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
             aoi_layer = folium.GeoJson(
                 aoi_geojson,
                 name="AOI",
-                style_function=lambda f: {"color": "#06b6d4", "weight": 3, "fillOpacity": 0.0},
+                style_function=lambda f: {"color": "#06b6d4", "weight": 2, "fillOpacity": 0.0},
             )
             aoi_layer.add_to(m)
 
@@ -869,39 +936,47 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
     <style>
       #smso-legend {{
         position:absolute;
-        top:12px;
-        right:12px;
+        bottom:16px;
+        right:16px;
         z-index:10001;
         background:rgba(255,255,255,0.97);
-        padding:10px 12px;
-        border-radius: 10px;
+        padding:14px 16px;
+        border-radius: 14px;
         border: 1px solid rgba(0,0,0,0.2);
-        box-shadow: 0 6px 20px rgba(0,0,0,0.28);
-        width: min(520px, calc(100% - 24px));
+        box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+        width: min(680px, calc(100% - 32px));
         pointer-events:auto;
       }}
       #smso-legend .ticks {{
         display:flex;
         justify-content:space-between;
-        gap:10px;
-        font-size: 12px;
+        gap:12px;
+        font-size: 14px;
         font-weight: 600;
         color:#111827;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
         line-height: 1;
       }}
       #smso-legend .bar {{
-        height: 12px;
+        height: 18px;
         width: 100%;
-        border-radius: 4px;
+        border-radius: 6px;
         border: 1px solid rgba(0,0,0,0.45);
         background: linear-gradient(to right, {gradient});
       }}
       #smso-legend .label {{
-        margin-top: 6px;
-        font-size: 12px;
+        margin-top: 8px;
+        font-size: 15px;
         font-weight: 700;
         color:#0f172a;
+      }}
+      .leaflet-control-layers-expanded {{
+        font-size: 14px;
+        min-width: 230px;
+      }}
+      .leaflet-control-layers label {{
+        font-size: 14px;
+        line-height: 1.45;
       }}
     </style>
     <div id="smso-legend">
@@ -913,49 +988,57 @@ def _build_sm_map(df_coords: pd.DataFrame, cell_size_m: int, aoi_geojson: dict |
     m.get_root().html.add_child(folium.Element(legend_html))
 
     features_legend_html = """
-    <style>
-      #smso-features-legend {
-        position: absolute;
-        top: 108px;
-        left: 12px;
-        z-index: 10010;
-        background: rgba(255,255,255,0.96);
-        color: #111827;
-        border: 1px solid rgba(0,0,0,0.25);
-        border-radius: 10px;
-        padding: 10px 12px;
-        font-size: 12px;
-        line-height: 1.35;
-        box-shadow: 0 8px 22px rgba(0,0,0,0.24);
-        max-width: min(360px, calc(100% - 24px));
-        pointer-events: auto;
-      }
-      #smso-features-legend .title {
-        font-weight: 700;
-        margin-bottom: 6px;
-      }
-      #smso-features-legend .item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      #smso-features-legend .dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #ef4444;
-        border: 1px solid rgba(0,0,0,0.35);
-        flex: 0 0 auto;
-      }
-    </style>
-    <div id="smso-features-legend">
-      <div class="title">Map features</div>
-      <div class="item">
-        <span class="dot"></span>
-        <span>Soil moisture sensors (grid cell centroids)</span>
+    <div
+      id="smso-features-legend"
+      style="
+        position:absolute;
+        bottom:16px;
+        left:16px;
+        z-index:10010;
+        background:rgba(255,255,255,0.96);
+        color:#111827;
+        border:1px solid rgba(0,0,0,0.25);
+        border-radius:14px;
+        padding:14px 16px;
+        font-size:14px;
+        line-height:1.45;
+        box-shadow:0 8px 22px rgba(0,0,0,0.24);
+        max-width:min(460px, calc(100% - 32px));
+        pointer-events:auto;
+      "
+    >
+      <div style="font-weight:700;font-size:15px;margin-bottom:8px;">Map features</div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span
+          style="
+            width:12px;
+            height:12px;
+            border-radius:50%;
+            background:#ef4444;
+            border:1px solid rgba(0,0,0,0.35);
+            flex:0 0 auto;
+            display:inline-block;
+          "
+        ></span>
+        <span>__SENSOR_LABEL__</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+        <span
+          style="
+            width:14px;
+            height:14px;
+            background:transparent;
+            border:2px solid #38bdf8;
+            border-radius:3px;
+            flex:0 0 auto;
+            display:inline-block;
+          "
+        ></span>
+        <span>Optimal sensor grid</span>
       </div>
     </div>
     """
+    features_legend_html = features_legend_html.replace("__SENSOR_LABEL__", str(sensor_label))
     m.get_root().html.add_child(folium.Element(features_legend_html))
 
     return m
@@ -1180,14 +1263,19 @@ def sensor_optimizer_view(request):
             tmp = tmp.drop(columns=["cell_size_m_int"])
             tmp["n_sensors"] = pd.to_numeric(tmp["n_sensors"], errors="coerce")
             tmp = tmp.sort_values("n_sensors")
+            summary_df = tmp.copy()
             summary_rows = tmp.to_dict(orient="records")
 
         cell_size_options = [{"value": int(v), "label": f"{int(v)} m"} for v in cell_sizes_list]
 
+        rule_used = selection_rule_label(best_row)
+        best_row_enriched = dict(best_row or {})
+        best_row_enriched["rule_used"] = rule_used
+
         # Store for map preview + PDF (keep your endpoints working)
         request.session["date_target"] = date_target
         request.session["summary_records"] = summary_df.to_dict(orient="records")
-        request.session["best_row"] = best_row
+        request.session["best_row"] = best_row_enriched
         request.session["centroid_data"] = centroid_data
 
         # Optional overlays for results
@@ -1210,12 +1298,13 @@ def sensor_optimizer_view(request):
             "plot_png_base64": plot_png_base64,
             "summary_rows": summary_rows,
             "summary_records": summary_df.to_dict(orient="records"),
-            "best_row": best_row,
+            "best_row": best_row_enriched,
             "centroid_data": centroid_data,
             "cell_size_options": cell_size_options,
             "optimal_cell_size": optimal_cell_size,
             "optimal_n": optimal_n,
             "optimal_cv": optimal_cv,
+            "selection_rule_used": rule_used,
             "area_m2": area_m2,
             "area_ha": area_ha,
             "aoi_geojson": aoi_geojson,
@@ -1257,38 +1346,86 @@ def centroid_map_view(request):
     if params.get("download_report") == "1":
         return download_layout_report_view(request)
 
-    cell_size = safe_int(params.get("cell_size_m"))
-    if cell_size is None:
-        return HttpResponseBadRequest("Missing/invalid cell_size_m")
-
     date_target = request.session.get("date_target")
     centroids_serial = request.session.get("centroid_data") or {}
-    if not date_target or not centroids_serial:
+    best_row = request.session.get("best_row") or {}
+    aoi_geojson = request.session.get("aoi_geojson")
+    if not date_target or not centroids_serial or not aoi_geojson:
         return HttpResponseBadRequest("Missing session data; please run optimization again.")
 
-    rows = centroids_serial.get(str(cell_size))
-    if not rows:
-        return HttpResponseBadRequest(f"No centroid data found for cell_size={cell_size}")
+    optimal_cell_size = safe_int(best_row.get("cell_size_m"))
+    if optimal_cell_size is None:
+        return HttpResponseBadRequest("Missing optimal configuration; please run optimization again.")
 
-    df_coords = pd.DataFrame(rows)
+    optimal_rows = centroids_serial.get(str(optimal_cell_size))
+    if not optimal_rows:
+        return HttpResponseBadRequest(
+            f"No centroid data found for optimal cell size={optimal_cell_size}"
+        )
 
-    aoi_geojson = request.session.get("aoi_geojson")
-    m = _build_sm_map(df_coords, cell_size_m=int(cell_size), aoi_geojson=aoi_geojson)
+    current_run_id = params.get("run_id") or request.session.get("last_run_id") or ""
+    cached_preview_run_id = request.session.get("preview_10m_run_id")
+    preview_rows = request.session.get("preview_10m_centroid_data")
+    if cached_preview_run_id != current_run_id:
+        preview_rows = None
+    preview_resolution_m = 10
+    surface_warning = ""
+
+    if not preview_rows:
+        geojson_tmp_path = None
+        try:
+            geojson_tmp_path = _save_geojson_dict(aoi_geojson)
+            _cv_pct, preview_df, _geom = predict_sm_on_grid(
+                date_target=date_target,
+                plot_geojson_path=geojson_tmp_path,
+                cell_size_m=preview_resolution_m,
+            )
+            preview_rows = preview_df.to_dict(orient="records")
+            request.session["preview_10m_centroid_data"] = preview_rows
+            request.session["preview_10m_run_id"] = current_run_id
+        except Exception:
+            preview_rows = optimal_rows
+            preview_resolution_m = optimal_cell_size
+            surface_warning = (
+                "The 10 m soil-moisture surface could not be generated for this run, "
+                f"so the map is showing the {optimal_cell_size} m optimization grid surface instead."
+            )
+            request.session["preview_10m_centroid_data"] = None
+            request.session["preview_10m_run_id"] = None
+        finally:
+            if geojson_tmp_path and os.path.exists(geojson_tmp_path):
+                try:
+                    os.remove(geojson_tmp_path)
+                except OSError:
+                    pass
+
+    surface_df = pd.DataFrame(preview_rows)
+    sensor_df = pd.DataFrame(optimal_rows)
+    m = _build_sm_map(
+        surface_df,
+        surface_cell_size_m=int(preview_resolution_m),
+        sensor_coords=sensor_df,
+        sensor_cell_size_m=int(optimal_cell_size),
+        aoi_geojson=aoi_geojson,
+    )
     map_html = m._repr_html_()
 
-    df_coords = df_coords.copy()
-    if "sensor_id" not in df_coords.columns:
-        df_coords.insert(0, "sensor_id", range(1, len(df_coords) + 1))
+    sensor_df = sensor_df.copy()
+    if "sensor_id" not in sensor_df.columns:
+        sensor_df.insert(0, "sensor_id", range(1, len(sensor_df) + 1))
 
     return render(
         request,
         "sensor_optimizer/map.html",
         {
                 "date_target": date_target,
-                "cell_size": int(cell_size),
+                "cell_size": int(optimal_cell_size),
+                "surface_cell_size": int(preview_resolution_m),
+                "surface_warning": surface_warning,
+                "cv_percent": best_row.get("cv_percent"),
                 "map_html": map_html,
-                "coords": df_coords.to_dict(orient="records"),
-                "run_id": params.get("run_id") or request.session.get("last_run_id") or "",
+                "coords": sensor_df.to_dict(orient="records"),
+                "run_id": current_run_id,
             },
     )
 
@@ -1304,6 +1441,7 @@ def download_layout_report_view(request):
     summary_records = request.session.get("summary_records")
     best_row = request.session.get("best_row")
     centroids_serial = request.session.get("centroid_data") or {}
+    area_ha = request.session.get("aoi_area_ha")
 
     if not (date_target and summary_records and best_row and centroids_serial):
         run_id = (
@@ -1321,6 +1459,7 @@ def download_layout_report_view(request):
         date_target = ctx.get("date_target")
         summary_records = ctx.get("summary_records") or ctx.get("summary_rows")
         centroids_serial = ctx.get("centroid_data") or {}
+        area_ha = ctx.get("area_ha", area_ha)
         best_row = None
         for r in (summary_records or []):
             if isinstance(r, dict) and r.get("is_optimal"):
@@ -1363,7 +1502,7 @@ def download_layout_report_view(request):
         cvp = float(cvp)
     except Exception:
         cvp = None
-
+    rule_used = best_row.get("rule_used") or selection_rule_label(best_row)
     elements.append(
         Paragraph(
             (
@@ -1380,10 +1519,41 @@ def download_layout_report_view(request):
         )
     )
     elements.append(Spacer(1, 0.2 * inch))
+    elements.append(Paragraph("Methodology", styles["Heading2"]))
+    elements.append(
+        Paragraph(
+            (
+                "A 10 m soil-moisture surface is estimated across the field polygon. "
+                "Candidate grid sizes are then generated inside that polygon, and each retained grid cell is "
+                "treated as a polygon-based soil-moisture unit for aggregation and comparison. The app computes the coefficient "
+                f"of variation (CV) across those grid-cell values. The selected layout uses the fewest sensors with CV below {CV_THRESHOLD_PERCENT:.0f}% "
+                "and at least 2 sensors; if no candidate satisfies that threshold, the app falls back "
+                "to the minimum-CV layout."
+            ),
+            styles["Normal"],
+        )
+    )
+    details = []
+    if rule_used:
+        details.append(f"Rule used: <b>{rule_used}</b>.")
+    if details:
+        elements.append(Paragraph(" ".join(details), styles["Normal"]))
+        elements.append(Spacer(1, 0.15 * inch))
 
     # Summary table
     elements.append(Paragraph("Optimization summary", styles["Heading2"]))
-    tbl = Table([summary_df.columns.tolist()] + summary_df.values.tolist(), repeatRows=1)
+    preferred_cols = [
+        "cell_size_m",
+        "n_sensors",
+        "cv_percent",
+    ]
+    summary_show = summary_df[[c for c in preferred_cols if c in summary_df.columns]].copy()
+    if summary_show.empty:
+        summary_show = summary_df.copy()
+    for col in ["theoretical_sensors_per_ha", "actual_sensors_per_ha", "cv_percent"]:
+        if col in summary_show.columns:
+            summary_show[col] = pd.to_numeric(summary_show[col], errors="coerce").round(2)
+    tbl = Table([summary_show.columns.tolist()] + summary_show.values.tolist(), repeatRows=1)
     tbl.setStyle(
         TableStyle(
             [

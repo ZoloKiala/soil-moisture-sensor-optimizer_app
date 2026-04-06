@@ -89,6 +89,10 @@
                 CV ≈ <strong>{{ optimal_cv|floatformat:2 }} %</strong>.
               </div>
 
+              <div class="alert alert-light border small mt-3 mb-0">
+                <strong>Method used.</strong> A 10 m soil-moisture surface is estimated across the uploaded field polygon. Candidate grid sizes are then tested inside that polygon, with each retained grid cell treated as a polygon-based soil-moisture unit. The app computes CV across those grid-cell values and chooses <strong>{{ selection_rule_used }}</strong>.
+              </div>
+
               <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
                 <a
                   href="{% url 'sensor_optimizer:download_layout_report' %}?run_id={{ run_id }}"
@@ -188,7 +192,7 @@
                 <div>
                   <h2 class="h6 mb-0">Sensor layout preview</h2>
                   <p class="text-muted small mb-0">
-                    Choose a grid cell size and open a map showing sensor locations.
+                    Open a map showing a 10 m soil-moisture surface with the optimal sensor layout overlaid.
                   </p>
                 </div>
               </div>
@@ -196,25 +200,7 @@
             <div class="card-body">
               <form method="get" action="{% url 'sensor_optimizer:sensor_optimizer_map' %}">
                 <input type="hidden" name="run_id" value="{{ run_id }}">
-
-                <label for="id_cell_size_m" class="form-label small fw-semibold mb-1">
-                  Grid cell size for map:
-                </label>
-
                 <div class="d-flex gap-2 align-items-center">
-                  <select
-                    id="id_cell_size_m"
-                    name="cell_size_m"
-                    class="form-select form-select-sm"
-                    style="max-width: 180px;"
-                  >
-                    {% for opt in cell_size_options %}
-                    <option value="{{ opt.value }}" {% if opt.value == optimal_cell_size %}selected{% endif %}>
-                      {{ opt.label }}
-                    </option>
-                    {% endfor %}
-                  </select>
-
                   <button type="submit" class="btn btn-primary btn-sm d-inline-flex align-items-center gap-2">
                     🗺️ Open map preview
                   </button>
@@ -222,7 +208,7 @@
               </form>
 
               <p class="small text-muted mt-3 mb-0">
-                The map preview overlays sensor locations for the chosen grid size.
+                The preview uses a 10 m soil-moisture surface when available and overlays the optimal sensor configuration selected by the optimizer.
               </p>
             </div>
           </div>
@@ -312,14 +298,15 @@
           const rep = reps[cs];
           let repLayer = L.layerGroup();
           if (rep && Number.isFinite(Number(rep.lat)) && Number.isFinite(Number(rep.lon))) {
-            const smText = (rep.sm_pred !== undefined && rep.sm_pred !== null)
-              ? `${Number(rep.sm_pred).toFixed(2)}%`
+            const smText = (rep.nearest_sensor_sm !== undefined && rep.nearest_sensor_sm !== null)
+              ? `${Number(rep.nearest_sensor_sm).toFixed(2)}%`
               : "n/a";
-            const distText = Number.isFinite(Number(rep.distance_to_cog_m))
-              ? `${Number(rep.distance_to_cog_m).toFixed(1)} m`
+            const distText = Number.isFinite(Number(rep.distance_to_nearest_sensor_m))
+              ? `${Number(rep.distance_to_nearest_sensor_m).toFixed(1)} m`
               : "n/a";
-            const latText = Number(rep.lat).toFixed(6);
-            const lonText = Number(rep.lon).toFixed(6);
+            const cogText = (Number.isFinite(Number(rep.cog_lat)) && Number.isFinite(Number(rep.cog_lon)))
+              ? `${Number(rep.cog_lat).toFixed(6)}, ${Number(rep.cog_lon).toFixed(6)}`
+              : "n/a";
             repLayer = L.layerGroup([
               L.circleMarker([Number(rep.lat), Number(rep.lon)], {
                 radius: isOpt ? 10 : 8,
@@ -328,18 +315,17 @@
                 fillColor: "#f59e0b",
                 fillOpacity: 1
               }).bindPopup(
-                `<b>Representative sensor (${cs} m)</b><br>` +
-                `Sensor ${rep.sensor_id}<br>` +
-                `Coordinate: ${latText}, ${lonText}<br>` +
-                `SM: ${smText}<br>` +
-                `Distance to field COG: ${distText}<br>` +
-                `Use this sensor for irrigation trigger decisions.`
+                `<b>Sensor-set center of gravity (${cs} m)</b><br>` +
+                `Coordinate: ${cogText}<br>` +
+                `Nearest sensor: ${rep.nearest_sensor_id ?? "n/a"}<br>` +
+                `Nearest sensor SM: ${smText}<br>` +
+                `Distance to nearest sensor: ${distText}`
               )
             ]);
           }
 
           const group = L.layerGroup([gridLayer, centroidLayer, repLayer]);
-          overlayLayers[`Grid ${cs} m (cells/lines + centroids + representative sensor)`] = group;
+          overlayLayers[`Grid ${cs} m (cells/lines + centroids + COG)`] = group;
 
           // show optimal by default (only)
           if (isOpt) group.addTo(map);

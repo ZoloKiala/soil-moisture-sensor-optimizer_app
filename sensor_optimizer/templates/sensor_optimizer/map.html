@@ -25,7 +25,8 @@
 
   <p class="subtitle">
     Date: <b>{{ date_target }}</b> ·
-    Cell size: <b>{{ cell_size }} m</b> ·
+    Soil moisture surface: <b>{{ surface_cell_size|default:cell_size }} m</b> ·
+    Optimal sensor layout: <b>{{ cell_size }} m</b> ·
     CV ≈ <b>{{ cv_percent|floatformat:2 }} %</b>
   </p>
 
@@ -36,6 +37,14 @@
   </div>
 </header>
 
+    {% if surface_warning %}
+    <div class="card" style="margin-bottom: 1rem; border: 1px solid #f59e0b; background: #fffbeb;">
+      <div class="card-sub" style="margin-bottom: 0; color: #92400e;">
+        <strong>Surface warning.</strong> {{ surface_warning }}
+      </div>
+    </div>
+    {% endif %}
+
 
     <div class="layout-two">
       <!-- LEFT: Map -->
@@ -45,8 +54,8 @@
           <span>Map</span>
         </div>
         <div class="card-sub">
-          Coloured tiles show predicted soil moisture (%) per grid cell.
-          Red dots mark sensor locations (grid centroids).
+          Coloured tiles show predicted soil moisture (%) on a 10 m surface where available.
+          Red dots mark the optimal sensor locations from the chosen layout, and blue outlines show the optimal sensor grid.
         </div>
 
         <div id="map-preview">
@@ -61,7 +70,7 @@
           <span>Sensor coordinates</span>
         </div>
         <div class="card-sub">
-          Coordinates exported from the same grid used for the map on the left.
+          Coordinates for the optimal sensor layout overlaid on the map.
         </div>
 
         <div class="table-wrapper">
@@ -100,7 +109,7 @@
         <p class="note">
           The layout report bundles this grid configuration into a single PDF:
           it includes the grid size, CV, number of sensors, and the full list
-          of sensor coordinates and predicted soil moisture values.
+          of optimal sensor coordinates and predicted soil moisture values.
         </p>
       </div>
     </div>
