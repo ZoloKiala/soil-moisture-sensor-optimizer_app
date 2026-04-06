@@ -930,7 +930,8 @@ def _build_sm_map(
     gradient = ", ".join(stops)
 
     ticks = [round(sm_min + (sm_max - sm_min) * (i / 7), 1) for i in range(8)]
-    ticks_html = "".join([f"<span>{t}</span>" for t in ticks])
+    ticks_desc = list(reversed(ticks))
+    tick_rows_html = "".join([f"<span>{t}</span>" for t in ticks_desc])
 
     legend_html = f"""
     <style>
@@ -941,35 +942,41 @@ def _build_sm_map(
         transform:translateY(-50%);
         z-index:10001;
         background:rgba(255,255,255,0.97);
-        padding:14px 16px;
+        padding:14px 14px;
         border-radius: 14px;
         border: 1px solid rgba(0,0,0,0.2);
         box-shadow: 0 8px 24px rgba(0,0,0,0.28);
-        width: min(360px, calc(100% - 32px));
+        width: 112px;
         pointer-events:auto;
+      }}
+      #smso-legend .legend-wrap {{
+        display:flex;
+        align-items:stretch;
+        gap:10px;
+      }}
+      #smso-legend .bar {{
+        height: 260px;
+        width: 18px;
+        border-radius: 6px;
+        border: 1px solid rgba(0,0,0,0.45);
+        background: linear-gradient(to top, {gradient});
+        flex: 0 0 auto;
       }}
       #smso-legend .ticks {{
         display:flex;
+        flex-direction:column;
         justify-content:space-between;
-        gap:12px;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
         color:#111827;
-        margin-bottom: 8px;
         line-height: 1;
       }}
-      #smso-legend .bar {{
-        height: 18px;
-        width: 100%;
-        border-radius: 6px;
-        border: 1px solid rgba(0,0,0,0.45);
-        background: linear-gradient(to right, {gradient});
-      }}
       #smso-legend .label {{
-        margin-top: 8px;
-        font-size: 15px;
+        margin-top: 10px;
+        font-size: 14px;
         font-weight: 700;
         color:#0f172a;
+        line-height: 1.25;
       }}
       .leaflet-control-layers-expanded {{
         font-size: 14px;
@@ -981,8 +988,10 @@ def _build_sm_map(
       }}
     </style>
     <div id="smso-legend">
-      <div class="ticks">{ticks_html}</div>
-      <div class="bar"></div>
+      <div class="legend-wrap">
+        <div class="bar"></div>
+        <div class="ticks">{tick_rows_html}</div>
+      </div>
       <div class="label">Predicted soil moisture (%)</div>
     </div>
     """
